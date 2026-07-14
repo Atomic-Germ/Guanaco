@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/atomic-germ/Projects/Guanaco/guanaco/build/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

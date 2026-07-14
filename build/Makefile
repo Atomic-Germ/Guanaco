@@ -65,26 +65,6 @@ CMAKE_BINARY_DIR = /home/atomic-germ/Projects/Guanaco/guanaco/build
 #=============================================================================
 # Targets provided globally by CMake.
 
-# Special rule for the target package
-package: preinstall
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Run CPack packaging tool..."
-	/usr/bin/cpack --config ./CPackConfig.cmake
-.PHONY : package
-
-# Special rule for the target package
-package/fast: package
-.PHONY : package/fast
-
-# Special rule for the target package_source
-package_source:
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Run CPack packaging tool for source..."
-	/usr/bin/cpack --config ./CPackSourceConfig.cmake
-.PHONY : package_source
-
-# Special rule for the target package_source
-package_source/fast: package_source
-.PHONY : package_source/fast
-
 # Special rule for the target edit_cache
 edit_cache:
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Running CMake cache editor..."
@@ -178,6 +158,7 @@ preinstall/fast:
 
 # clear depends
 depend:
+	$(CMAKE_COMMAND) -P /home/atomic-germ/Projects/Guanaco/guanaco/build/CMakeFiles/VerifyGlobs.cmake
 	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 1
 .PHONY : depend
 
@@ -206,6 +187,84 @@ guanaco_example: cmake_check_build_system
 guanaco_example/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/guanaco_example.dir/build.make CMakeFiles/guanaco_example.dir/build
 .PHONY : guanaco_example/fast
+
+#=============================================================================
+# Target rules for targets named ggml-base
+
+# Build rule for target.
+ggml-base: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 ggml-base
+.PHONY : ggml-base
+
+# fast build rule for target.
+ggml-base/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/build.make llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/build
+.PHONY : ggml-base/fast
+
+#=============================================================================
+# Target rules for targets named ggml
+
+# Build rule for target.
+ggml: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 ggml
+.PHONY : ggml
+
+# fast build rule for target.
+ggml/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/ggml/src/CMakeFiles/ggml.dir/build.make llama.cpp/ggml/src/CMakeFiles/ggml.dir/build
+.PHONY : ggml/fast
+
+#=============================================================================
+# Target rules for targets named ggml-cpu
+
+# Build rule for target.
+ggml-cpu: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 ggml-cpu
+.PHONY : ggml-cpu
+
+# fast build rule for target.
+ggml-cpu/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/build.make llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/build
+.PHONY : ggml-cpu/fast
+
+#=============================================================================
+# Target rules for targets named ggml-vulkan
+
+# Build rule for target.
+ggml-vulkan: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 ggml-vulkan
+.PHONY : ggml-vulkan
+
+# fast build rule for target.
+ggml-vulkan/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/build.make llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/build
+.PHONY : ggml-vulkan/fast
+
+#=============================================================================
+# Target rules for targets named vulkan-shaders-gen
+
+# Build rule for target.
+vulkan-shaders-gen: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 vulkan-shaders-gen
+.PHONY : vulkan-shaders-gen
+
+# fast build rule for target.
+vulkan-shaders-gen/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/vulkan-shaders-gen.dir/build.make llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/vulkan-shaders-gen.dir/build
+.PHONY : vulkan-shaders-gen/fast
+
+#=============================================================================
+# Target rules for targets named llama
+
+# Build rule for target.
+llama: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama
+.PHONY : llama
+
+# fast build rule for target.
+llama/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/src/CMakeFiles/llama.dir/build.make llama.cpp/src/CMakeFiles/llama.dir/build
+.PHONY : llama/fast
 
 examples/guanaco_example.o: examples/guanaco_example.cpp.o
 .PHONY : examples/guanaco_example.o
@@ -386,11 +445,15 @@ help:
 	@echo "... install/local"
 	@echo "... install/strip"
 	@echo "... list_install_components"
-	@echo "... package"
-	@echo "... package_source"
 	@echo "... rebuild_cache"
+	@echo "... vulkan-shaders-gen"
+	@echo "... ggml"
+	@echo "... ggml-base"
+	@echo "... ggml-cpu"
+	@echo "... ggml-vulkan"
 	@echo "... guanaco"
 	@echo "... guanaco_example"
+	@echo "... llama"
 	@echo "... examples/guanaco_example.o"
 	@echo "... examples/guanaco_example.i"
 	@echo "... examples/guanaco_example.s"
@@ -423,6 +486,7 @@ help:
 # No rule that depends on this can have commands that come from listfiles
 # because they might be regenerated.
 cmake_check_build_system:
+	$(CMAKE_COMMAND) -P /home/atomic-germ/Projects/Guanaco/guanaco/build/CMakeFiles/VerifyGlobs.cmake
 	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 0
 .PHONY : cmake_check_build_system
 
