@@ -303,6 +303,30 @@ src/guanaco_manifest.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/guanaco.dir/build.make CMakeFiles/guanaco.dir/src/guanaco_manifest.cpp.s
 .PHONY : src/guanaco_manifest.cpp.s
 
+src/guanaco_model_hook.o: src/guanaco_model_hook.cpp.o
+.PHONY : src/guanaco_model_hook.o
+
+# target to build an object file
+src/guanaco_model_hook.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/guanaco.dir/build.make CMakeFiles/guanaco.dir/src/guanaco_model_hook.cpp.o
+.PHONY : src/guanaco_model_hook.cpp.o
+
+src/guanaco_model_hook.i: src/guanaco_model_hook.cpp.i
+.PHONY : src/guanaco_model_hook.i
+
+# target to preprocess a source file
+src/guanaco_model_hook.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/guanaco.dir/build.make CMakeFiles/guanaco.dir/src/guanaco_model_hook.cpp.i
+.PHONY : src/guanaco_model_hook.cpp.i
+
+src/guanaco_model_hook.s: src/guanaco_model_hook.cpp.s
+.PHONY : src/guanaco_model_hook.s
+
+# target to generate assembly for a file
+src/guanaco_model_hook.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/guanaco.dir/build.make CMakeFiles/guanaco.dir/src/guanaco_model_hook.cpp.s
+.PHONY : src/guanaco_model_hook.cpp.s
+
 src/guanaco_router.o: src/guanaco_router.cpp.o
 .PHONY : src/guanaco_router.o
 
@@ -379,6 +403,9 @@ help:
 	@echo "... src/guanaco_manifest.o"
 	@echo "... src/guanaco_manifest.i"
 	@echo "... src/guanaco_manifest.s"
+	@echo "... src/guanaco_model_hook.o"
+	@echo "... src/guanaco_model_hook.i"
+	@echo "... src/guanaco_model_hook.s"
 	@echo "... src/guanaco_router.o"
 	@echo "... src/guanaco_router.i"
 	@echo "... src/guanaco_router.s"

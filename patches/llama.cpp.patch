@@ -1,63 +1,33 @@
 diff --git a/src/llama.cpp b/src/llama.cpp
-index xxxxxxx..yyyyyyy 100644
+index 0de6048f2..a142f0133 100644
 --- a/src/llama.cpp
 +++ b/src/llama.cpp
-@@ -420,6 +420,10 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
-         llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.use_mmap, params.use_direct_io,
+@@ -10,6 +10,10 @@
+ #include "llama-model-saver.h"
+ #include "llama-model.h"
  
 +#ifdef GUANACO_ENABLED
-+        params.use_guanaco_streaming, params.guanaco_max_active_experts,
++#include "guanaco/guanaco.h"
 +#endif
-+        params.check_tensors, params.no_alloc, kv_overrides, nullptr);
- 
-     if (status != 0) {
-         return { status, nullptr };
-@@ -430,6 +434,10 @@ static struct llama_model * llama_model_load_from_file_impl(
-     params.use_mmap = false;
- 
-+#ifdef GUANACO_ENABLED
-+    if (params.use_guanaco_streaming) {
-+        llama_model_set_guanaco_hook(new guanaco_model_hook(params));
-+    }
-+#endif
-     return llama_model_load_from_file_impl(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, /*file*/ nullptr, params);
- }
- 
-@@ -438,6 +446,10 @@ struct llama_model * llama_model_load_from_file(
-     llama_model_params params = llama_model_default_params();
-+#ifdef GUANACO_ENABLED
-+    if (params.use_guanaco_streaming) {
-+        llama_model_set_guanaco_hook(new guanaco_model_hook(params));
-+    }
-+#endif
-     return llama_model_load_from_file_impl(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, /*file*/ nullptr, params);
- }
- 
-@@ -450,6 +462,15 @@ struct llama_model * llama_model_load_from_file(
- 
-     if (params.use_guanaco_streaming) {
-         // Guanaco integration: enable expert streaming
-+#ifdef GUANACO_ENABLED
-+        llama_model_set_guanaco_hook(new guanaco_model_hook(params));
-+#endif
-         // The actual hook is set during model loading
-     }
- 
-     return llama_model_load_from_file_impl(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, /*file*/ nullptr, params);
++
+ #include "ggml.h"
+ #include "ggml-cpp.h"
+ #include "ggml-backend.h"
+@@ -579,3 +583,17 @@ const char * llama_print_system_info(void) {
+     return s.c_str();
  }
  
 +#ifdef GUANACO_ENABLED
-+// Guanaco integration: set the global hook
-+LLAMA_API void llama_model_set_guanaco_hook(void* hook) {
-+    ::g_guanaco_hook = static_cast<guanaco_model_hook*>(hook);
++void llama_guanaco_enable_streaming(struct llama_context * ctx, bool enable) {
++    // TODO: wire up Guanaco streaming to the context
++    (void)ctx;
++    (void)enable;
 +}
 +
-+// Guanaco integration: check if streaming is enabled
-+LLAMA_API bool llama_model_use_guanaco_streaming(const struct llama_model* model) {
-+    return model->params.use_guanaco_streaming;
++void llama_guanaco_set_max_experts(struct llama_context * ctx, int32_t max_experts) {
++    // TODO: wire up Guanaco max experts to the context
++    (void)ctx;
++    (void)max_experts;
 +}
 +#endif
 +
- // llama.cpp internal
- const char * llama_print_system_info(void) {
-     return "llama.cpp";

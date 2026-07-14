@@ -145,7 +145,7 @@ CMAKE_OBJCOPY:FILEPATH=/usr/bin/objcopy
 CMAKE_OBJDUMP:FILEPATH=/usr/bin/objdump
 
 //No help, variable specified on the command line.
-CMAKE_PREFIX_PATH:UNINITIALIZED=../llama.cpp/build
+CMAKE_PREFIX_PATH:UNINITIALIZED=/home/atomic-germ/Projects/Guanaco/llama.cpp/build
 
 //Value Computed by CMake
 CMAKE_PROJECT_COMPAT_VERSION:STATIC=
@@ -299,8 +299,11 @@ GUANACO_BUILD_EXAMPLES:BOOL=ON
 //Build tests
 GUANACO_BUILD_TESTS:BOOL=OFF
 
+//Patch llama.cpp for Guanaco integration
+GUANACO_PATCH_LLAMA_CPP:BOOL=ON
+
 //Use io_uring for async I/O (Linux only)
-GUANACO_USE_IO_URING:BOOL=OFF
+GUANACO_USE_IO_URING:BOOL=ON
 
 //Path to a library.
 IO_URING_LIBRARY:FILEPATH=IO_URING_LIBRARY-NOTFOUND
