@@ -30,6 +30,11 @@ struct GUANACO_API ExpertManifestEntry {
     int tensor_type;
     std::string quantization_type;
     int num_experts_in_tensor = 1;
+    // Expert slice info (for fused tensors)
+    size_t expert_slice_offset = 0;
+    size_t expert_slice_size = 0;
+    int64_t tensor_dims[4] = {1, 1, 1, 1};
+    uint32_t tensor_n_dims = 1;
 };
 
 struct GUANACO_API ExpertTensorBuffer {
@@ -83,6 +88,9 @@ private:
     
     bool parse_gguf_manifest();
     bool parse_gguf_metadata();
+    void parse_tensor_dims_from_file(
+        std::unordered_map<std::string, std::array<int64_t, 4>>& out_dims,
+        std::unordered_map<std::string, uint32_t>& out_n_dims);
     std::future<void> read_expert_async(const ExpertManifestEntry& entry,
                                          std::shared_ptr<ExpertTensorBuffer> target_buf);
 };

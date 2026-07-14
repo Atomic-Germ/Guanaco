@@ -51,6 +51,11 @@ void SteppeLoader::shutdown() {
 }
 
 bool SteppeLoader::parse_gguf_manifest() {
+    // First pass: parse tensor dimensions directly from file
+    std::unordered_map<std::string, std::array<int64_t, 4>> tensor_dims;
+    std::unordered_map<std::string, uint32_t> tensor_n_dims;
+    parse_tensor_dims_from_file(tensor_dims, tensor_n_dims);
+    
     struct gguf_init_params params = { false, nullptr };
     struct gguf_context* ctx = gguf_init_from_file(config_.gguf_path.c_str(), params);
     if (!ctx) {
@@ -76,6 +81,22 @@ bool SteppeLoader::parse_gguf_manifest() {
         int expert_idx = -1;
         int tensor_type = -1;
         int num_experts_in_tensor = 1;
+        
+        // Get tensor dimensions if available
+        auto dim_it = tensor_dims.find(name_str);
+        std::array<int64_t, 4> dims = {1, 1, 1, 1};
+        uint32_t n_dims = 1;
+        if (dim_it != tensor_dims.end()) {
+            dims = dim_it->second;
+            n_dims = tensor_n_dims[name_str];
+            
+            // For expert tensors, the expert count is usually in ne[2] or ne[3]
+            for (uint32_t d = 0; d < n_dims; ++d) {
+                if (dims[d] > 1 && (d == 2 || d == 3)) {
+                    num_experts_in_tensor = static_cast<int>(dims[d]);
+                }
+            }
+        }
         
         if (name_str.find("ffn_up_exps") != std::string::npos ||
             name_str.find("ffn_down_exps") != std::string::npos ||
@@ -113,6 +134,16 @@ bool SteppeLoader::parse_gguf_manifest() {
             entry.num_experts_in_tensor = num_experts_in_tensor;
             entry.tensor_type = tensor_type;
             entry.quantization_type = ggml_type_name(type);
+            entry.tensor_n_dims = n_dims;
+            for (uint32_t d = 0; d < 4; ++d) {
+                entry.tensor_dims[d] = dims[d];
+            }
+            
+            // Calculate expert slice info
+            if (num_experts_in_tensor > 1) {
+                entry.expert_slice_size = byte_size / num_experts_in_tensor;
+            }
+            
             manifest_.push_back(std::move(entry));
             layer_experts_[layer_idx].push_back(manifest_.back());
         }
@@ -124,6 +155,93 @@ bool SteppeLoader::parse_gguf_manifest() {
               << layer_experts_.size() << " layers" << std::endl;
     
     return true;
+}
+
+void SteppeLoader::parse_tensor_dims_from_file(
+    std::unordered_map<std::string, std::array<int64_t, 4>>& out_dims,
+    std::unordered_map<std::string, uint32_t>& out_n_dims) {
+    // Parse GGUF file directly to get tensor dimensions
+    // This mimics the internal gguf.cpp parsing logic
+    
+    int fd = open(config_.gguf_path.c_str(), O_RDONLY);
+    if (fd < 0) return;
+    
+    // Read header
+    char magic[4];
+    read(fd, magic, 4);
+    uint32_t version;
+    read(fd, &version, 4);
+    uint64_t n_tensors, n_kv;
+    read(fd, &n_tensors, 8);
+    read(fd, &n_kv, 8);
+    
+    // Skip KV pairs
+    for (uint64_t i = 0; i < n_kv; ++i) {
+        uint64_t key_len;
+        read(fd, &key_len, 8);
+        lseek(fd, key_len, SEEK_CUR); // skip key
+        uint32_t val_type;
+        read(fd, &val_type, 4);
+        
+        // Skip value based on type
+        if (val_type == 0 || val_type == 1) { lseek(fd, 1, SEEK_CUR); } // uint8/int8
+        else if (val_type == 2 || val_type == 3) { lseek(fd, 2, SEEK_CUR); } // uint16/int16
+        else if (val_type == 4 || val_type == 5 || val_type == 6) { lseek(fd, 4, SEEK_CUR); } // uint32/int32/float32
+        else if (val_type == 7) { lseek(fd, 1, SEEK_CUR); } // bool
+        else if (val_type == 8) { // string
+            uint64_t str_len;
+            read(fd, &str_len, 8);
+            lseek(fd, str_len, SEEK_CUR);
+        } else if (val_type == 9) { // array
+            uint32_t arr_type;
+            uint64_t arr_len;
+            read(fd, &arr_type, 4);
+            read(fd, &arr_len, 8);
+            size_t elem_size = 0;
+            if (arr_type == 8) { // string array
+                for (uint64_t j = 0; j < arr_len; ++j) {
+                    uint64_t s_len;
+                    read(fd, &s_len, 8);
+                    lseek(fd, s_len, SEEK_CUR);
+                }
+            } else if (arr_type == 4 || arr_type == 5) { elem_size = 4; }
+            else if (arr_type == 10 || arr_type == 11) { elem_size = 8; }
+            else if (arr_type == 12) { elem_size = 8; }
+            else { elem_size = 4; }
+            lseek(fd, arr_len * elem_size, SEEK_CUR);
+        } else if (val_type == 10 || val_type == 11) { lseek(fd, 8, SEEK_CUR); } // uint64/int64
+        else if (val_type == 12) { lseek(fd, 8, SEEK_CUR); } // float64
+    }
+    
+    // Now at tensor info section
+    for (uint64_t i = 0; i < n_tensors; ++i) {
+        // Read tensor name
+        uint64_t name_len;
+        read(fd, &name_len, 8);
+        std::string name(name_len, '\0');
+        read(fd, name.data(), name_len);
+        
+        // Read tensor dimensions
+        uint32_t n_dims;
+        read(fd, &n_dims, 4);
+        
+        std::array<int64_t, 4> dims = {1, 1, 1, 1};
+        for (uint32_t d = 0; d < 4; ++d) {
+            if (d < n_dims) {
+                int64_t dim;
+                read(fd, &dim, 8);
+                dims[d] = dim;
+            }
+        }
+        
+        // Skip type and offset (we'll read offset from gguf API)
+        lseek(fd, 4 + 8, SEEK_CUR); // type (4 bytes) + offset (8 bytes)
+        
+        out_dims[name] = dims;
+        out_n_dims[name] = n_dims;
+    }
+    
+    close(fd);
 }
 
 bool SteppeLoader::parse_gguf_metadata() {
@@ -286,7 +404,11 @@ std::future<void> SteppeLoader::prefetch_experts(int layer_idx, const std::vecto
 
 std::future<void> SteppeLoader::read_expert_async(const ExpertManifestEntry& entry,
                                                    std::shared_ptr<ExpertTensorBuffer> target_buf) {
-    target_buf->data.resize(entry.byte_size);
+    // Calculate expert slice size and offset
+    size_t slice_size = entry.expert_slice_size > 0 ? entry.expert_slice_size : entry.byte_size;
+    size_t slice_offset = entry.file_offset + (entry.expert_idx >= 0 ? static_cast<size_t>(entry.expert_idx) * slice_size : 0);
+    
+    target_buf->data.resize(slice_size);
     target_buf->expert_id = entry.expert_idx;
     target_buf->layer_idx = entry.layer_idx;
     target_buf->is_ready = false;
@@ -294,17 +416,17 @@ std::future<void> SteppeLoader::read_expert_async(const ExpertManifestEntry& ent
     auto promise = std::make_shared<std::promise<void>>();
     auto future = promise->get_future();
 
-    std::thread([this, entry, target_buf, promise]() {
-        off_t ret = lseek(fd_, static_cast<off_t>(entry.file_offset), SEEK_SET);
+    std::thread([this, slice_offset, slice_size, target_buf, promise]() {
+        off_t ret = lseek(fd_, static_cast<off_t>(slice_offset), SEEK_SET);
         if (ret == -1) {
             promise->set_exception(std::make_exception_ptr(std::runtime_error("lseek failed")));
             return;
         }
 
         size_t total_read = 0;
-        while (total_read < entry.byte_size) {
+        while (total_read < slice_size) {
             ssize_t n = read(fd_, target_buf->data.data() + total_read, 
-                            entry.byte_size - total_read);
+                            slice_size - total_read);
             if (n <= 0) {
                 promise->set_exception(std::make_exception_ptr(std::runtime_error("read failed")));
                 return;

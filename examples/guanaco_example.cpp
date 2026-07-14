@@ -27,24 +27,34 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::cout << "[Guanaco] Engine initialized successfully" << std::endl;
+    const auto& model_config = engine.loader()->get_model_config();
+    std::cout << "[Guanaco] Model: " << model_config.architecture << std::endl;
+    std::cout << "[Guanaco] Total experts: " << model_config.num_experts 
+              << ", top_k: " << model_config.num_experts_per_tok
+              << ", layers: " << model_config.num_hidden_layers
+              << ", hidden: " << model_config.hidden_size << std::endl;
     std::cout << "[Guanaco] Manifest entries: " << engine.loader()->get_manifest().size() << std::endl;
     
     for (const auto& entry : engine.loader()->get_manifest()) {
-        std::cout << "  Layer " << entry.layer_idx << " Expert " << entry.expert_idx 
-                  << ": " << entry.tensor_name 
-                  << " (" << entry.byte_size / 1024 / 1024 << " MB)"
-                  << std::endl;
+        std::cout << "  Layer " << entry.layer_idx 
+                  << " (" << entry.tensor_name 
+                  << "): " << entry.byte_size / 1024 / 1024 << " MB";
+        if (entry.num_experts_in_tensor > 1) {
+            double per_expert_mb = static_cast<double>(entry.expert_slice_size) / 1024.0 / 1024.0;
+            std::cout << " (" << entry.num_experts_in_tensor 
+                      << " experts, " << per_expert_mb << " MB/expert)";
+        }
+        std::cout << std::endl;
     }
 
     std::cout << std::endl;
     std::cout << "[Guanaco] Starting token processing simulation..." << std::endl;
     
-    std::vector<float> hidden_states(4096, 0.1f);
+    std::vector<float> hidden_states(model_config.hidden_size > 0 ? model_config.hidden_size : 4096, 0.1f);
     
     engine.set_router_callback([](int layer_idx, const std::vector<int>& experts) {
         std::cout << "[Guanaco Router] Layer " << layer_idx 
-                  << " selected experts: ";
+                  << " selected " << experts.size() << " experts: ";
         for (int e : experts) std::cout << e << " ";
         std::cout << std::endl;
     });

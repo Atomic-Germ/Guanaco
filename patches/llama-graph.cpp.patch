@@ -1,0 +1,169 @@
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index xxxxxxx..yyyyyyy 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -10,6 +10,10 @@
+ #include "llama.h"
+ #include "llama-graph.h"
+ 
++#ifdef GUANACO_ENABLED
++#include "guanaco/guanaco_model_hook.h"
++#endif
++
+ #include <cmath>
+ #include <algorithm>
+ #include <iostream>
+@@ -1750,6 +1754,16 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+     return build_moe_ffn(
+         cur,
+         gate_inp,  /* gate_inp_b  */ nullptr,
+         up_exps,   /* up_exps_b   */ nullptr,
+         gate_exps, /* gate_exps_b */ nullptr,
+         down_exps, /* down_exps_b */ nullptr,
+         exp_probs_b,
+         n_expert,
+         n_expert_used,
+         type_op,
+         norm_w,
+         w_scale,
+         gating_op,
+         il,
+         probs_in,
+         gate_up_exps,
+         /* gate_up_exps_b */ nullptr,
+         up_exps_s,
+         gate_exps_s,
+         down_exps_s,
+         selected_experts_in
+     );
+ }
+ 
++#ifdef GUANACO_ENABLED
++// Guanaco integration: redirect expert tensor data to streaming buffers
++static void guanaco_redirect_expert_tensors(int layer_idx, const std::vector<int>& expert_ids,
++                                            ggml_tensor* up_exps, ggml_tensor* gate_exps, ggml_tensor* down_exps,
++                                            const llm_graph_context* ctx) {
++    if (!ctx->model->use_guanaco_streaming()) return;
++    auto hook = ctx->model->get_guanaco_hook();
++    for (int expert_id : expert_ids) {
++        if (up_exps)   hook->redirect_tensor_data(up_exps,   layer_idx, expert_id, 0);
++        if (gate_exps) hook->redirect_tensor_data(gate_exps, layer_idx, expert_id, 1);
++        if (down_exps) hook->redirect_tensor_data(down_exps, layer_idx, expert_id, 2);
++    }
++}
++#endif
++
+ ggml_tensor * llm_graph_context::build_moe_ffn(
+          ggml_tensor * cur,
+          ggml_tensor * gate_inp,
+@@ -1830,6 +1844,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+             probs = ggml_sqrt(ctx0, ggml_softplus(ctx0, logits)); // [n_expert, n_tokens]
+         }
+     }
++#ifdef GUANACO_ENABLED
++    // Guanaco integration: trigger prefetch after router computes logits
++    if (model->use_guanaco_streaming() && model->get_guanaco_hook()) {
++        auto hook = model->get_guanaco_hook();
++        hook->on_router_computed(il, logits->data, n_expert, n_expert_used, n_tokens);
++    }
++#endif
+     cb(probs, "ffn_moe_probs", il);
+ 
+     // add experts selection bias - introduced in DeepSeek V3
+@@ -1915,6 +1935,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         cb(selected_experts, "ffn_moe_topk", il);
+ 
++#ifdef GUANACO_ENABLED
++    // Guanaco integration: trigger expert prefetch after top-k selection
++    if (model->use_guanaco_streaming() && model->get_guanaco_hook()) {
++        model->get_guanaco_hook()->prefetch_experts(il, extract_topk_indices(selected_experts, n_expert_used));
++    }
++#endif
++
+     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
+         // TODO: Use scalar div instead when/if implemented
+         ggml_tensor * f_sel = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);
+@@ -1965,6 +1991,14 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+     if (gate_up_exps) {
+         // merged gate_up path: one mul_mat_id, then split into gate and up views
+         ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
++#ifdef GUANACO_ENABLED
++        // Guanaco integration: redirect expert tensor data to streaming buffers
++        if (model->use_guanaco_streaming() && model->get_guanaco_hook()) {
++            std::vector<int> expert_ids = extract_topk_indices(selected_experts, n_expert_used);
++            guanaco_redirect_expert_tensors(il, expert_ids, up_exps, gate_exps, down_exps, this);
++        }
++#endif
+         cb(gate_up, "ffn_moe_gate_up", il);
+ 
+         if (up_exps_s) {
+@@ -2000,6 +2034,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         } else {
+             // separate gate and up path
+             up = build_lora_mm_id(up_exps, cur, selected_experts, up_exps_s); // [n_ff, n_expert_used, n_tokens]
++#ifdef GUANACO_ENABLED
++            // Guanaco integration: redirect expert tensor data to streaming buffers
++            if (model->use_guanaco_streaming() && model->get_guanaco_hook()) {
++                std::vector<int> expert_ids = extract_topk_indices(selected_experts, n_expert_used);
++                guanaco_redirect_expert_tensors(il, expert_ids, up_exps, gate_exps, down_exps, this);
++            }
++#endif
+             cb(up, "ffn_moe_up", il);
+ 
+             if (up_exps_s) {
+@@ -2015,6 +2055,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         }
+ 
++#ifdef GUANACO_ENABLED
++        // Guanaco integration: redirect expert tensor data to streaming buffers
++        if (model->use_guanaco_streaming() && model->get_guanaco_hook()) {
++            std::vector<int> expert_ids = extract_topk_indices(selected_experts, n_expert_used);
++            guanaco_redirect_expert_tensors(il, expert_ids, up_exps, gate_exps, down_exps, this);
++        }
++#endif
++
+         ggml_tensor * gate = build_lora_mm_id(gate_exps, cur, selected_experts, gate_exps_s); // [n_ff, n_expert_used, n_tokens]
+         cb(gate, "ffn_moe_gate", il);
+ 
+@@ -2050,6 +2096,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+             cur = ggml_mul(ctx0, cur, weights);
+             cb(cur, "ffn_moe_weighted", il);
+         }
++
++#ifdef GUANACO_ENABLED
++        // Guanaco integration: release expert buffers after computation
++        if (model->use_guanaco_streaming() && model->get_guanaco_hook()) {
++            std::vector<int> expert_ids = extract_topk_indices(selected_experts, n_expert_used);
++            model->get_guanaco_hook()->release_experts(il, expert_ids);
++        }
++#endif
++
+         if (gate_up_exps) {
+             // merged gate_up path: already computed cur as weighted sum
+         } else {
+@@ -3510,6 +3562,25 @@ struct ggml_tensor * build_inp_pos(const llm_graph_context * ctx, bool skip_inp_
+     }
+ 
++#ifdef GUANACO_ENABLED
++// Guanaco integration: helper to extract top-k indices from selected_experts tensor
++static std::vector<int> extract_topk_indices(ggml_tensor* selected_experts, int n_expert_used) {
++    std::vector<int> result;
++    if (!selected_experts) return result;
++    const int32_t* data = static_cast<const int32_t*>(selected_experts->data);
++    if (!data) return result;
++    int64_t n_tokens = selected_experts->ne[1];
++    int64_t n_experts = selected_experts->ne[0];
++    for (int64_t t = 0; t < n_tokens; ++t) {
++        for (int64_t k = 0; k < n_expert_used && k < n_experts; ++k) {
++            result.push_back(data[k * n_tokens + t]);
++        }
++    }
++    std::sort(result.begin(), result.end());
++    result.erase(std::unique(result.begin(), result.end()), result.end());
++    return result;
++}
++#endif
++
+ // ============================================================
+ // Gated Linear Units
+ // ============================================================

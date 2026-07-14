@@ -1,0 +1,89 @@
+diff --git a/src/llama-model.h b/src/llama-model.h
+index xxxxxxx..yyyyyyy 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -10,6 +10,18 @@
+ 
+ #include "llama-mmap.h"
+ 
++// Guanaco integration for MoE disk streaming
++#ifdef GUANACO_ENABLED
++#include "guanaco/guanaco.h"
++#endif
++
++// Guanaco integration: hook for expert tensor handling
++#ifdef GUANACO_ENABLED
++struct guanaco_expert_hook {
++    virtual bool should_stream_expert(const char* tensor_name, int layer_idx, int expert_idx) = 0;
++    virtual void* get_expert_buffer(int layer_idx, int expert_idx, size_t size) = 0;
++    virtual void prefetch_experts(int layer_idx, const std::vector<int>& expert_ids) = 0;
++    virtual ~guanaco_expert_hook() = default;
++};
++#else
++struct guanaco_expert_hook; // forward declaration
++#endif
++
+ namespace ggml {
+     struct tensor;
+@@ -33,6 +45,10 @@ struct llama_model_loader {
+         llama_tensor_weight(const llama_file * file, uint16_t idx, const struct gguf_context * gguf_ctx, ggml_tensor * tensor) : idx(idx), tensor(tensor) {
+             const int tensor_idx = gguf_find_tensor(gguf_ctx,  ggml_get_name(tensor));
+             if (tensor_idx < 0) {
+                 throw std::runtime_error(format("tensor '%s' not found in the model", ggml_get_name(tensor)));
++#ifdef GUANACO_ENABLED
++            } else if (guanaco_expert_hook_instance && guanaco_expert_hook_instance->should_stream_expert(ggml_get_name(tensor), -1, -1)) {
++                // Expert tensor will be streamed by Guanaco
++#endif
+             }
+ 
+             offs = gguf_get_data_offset(gguf_ctx) + gguf_get_tensor_offset(gguf_ctx, tensor_idx);
+@@ -678,6 +696,12 @@ struct llama_model_base {
+     virtual void load_stats  (llama_model_loader & ml) = 0;
+     virtual void load_hparams(llama_model_loader & ml) = 0;
+     virtual void load_vocab  (llama_model_loader & ml) = 0;
++#ifdef GUANACO_ENABLED
++    // Guanaco integration: override to handle expert tensors
++    virtual void load_expert_tensors(llama_model_loader & ml) {}
++    virtual bool use_guanaco_streaming() const { return false; }
++    virtual guanaco_expert_hook* get_guanaco_hook() { return nullptr; }
++    virtual void set_guanaco_hook(guanaco_expert_hook* hook) {}
++#endif
+     virtual bool load_tensors(llama_model_loader & ml) = 0; // returns false if cancelled by progress_callback
+ 
+     virtual void load_arch_hparams(llama_model_loader & ml) = 0.
+@@ -693,6 +717,10 @@ struct llama_model {
+     llama_model_loader * ml = nullptr;
+ 
+     // llama_model_loader is not yet defined at this point, so we will set it after construction
++#ifdef GUANACO_ENABLED
++    // Guanaco integration: hook for expert tensor streaming
++    static guanaco_expert_hook* guanaco_expert_hook_instance;
++#endif
+ 
+     ggml_tensor * create_tensor(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
+ 
+     // convenience overload of create_tensor that doesn't require llama_model_loader
+@@ -726,6 +754,10 @@ struct llama_model {
+     void load_stats  (llama_model_loader & ml) override;
+     void load_hparams(llama_model_loader & ml) override;
+     void load_vocab  (llama_model_loader & ml) override;
++    // Guanaco integration
++    void load_expert_tensors(llama_model_loader & ml) override;
++    bool use_guanaco_streaming() const override { return guanaco_enabled_; }
++    guanaco_expert_hook* get_guanaco_hook() override { return guanaco_hook_.get(); }
++    void set_guanaco_hook(guanaco_expert_hook* hook) override { guanaco_hook_.reset(hook); }
+     bool load_tensors(llama_model_loader & ml) override;
+ 
+     virtual void load_arch_hparams(llama_model_loader & ml) = 0.
+@@ -760,6 +792,10 @@ struct llama_model {
+     llama_ftype ftype;
+     llama_fver  fver;
+ 
++    // Guanaco integration
++    bool guanaco_enabled_ = false;
++    std::unique_ptr<guanaco_expert_hook> guanaco_hook_;
++    int guanaco_max_active_experts_ = 2;
++
+     size_t size_done = 0;
+     size_t size_data = 0.
+     std::vector<std::pair<size_t, size_t>> mmaps_used.

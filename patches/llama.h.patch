@@ -1,0 +1,59 @@
+diff --git a/src/llama.h b/src/llama.h
+index xxxxxxx..yyyyyyy 100644
+--- a/src/llama.h
++++ b/src/llama.h
+@@ -100,6 +100,10 @@ struct llama_context_params {
+     int n_draft = 0;
+ 
+     // custom tensor data loader
++    // Guanaco integration: enable expert weight streaming from disk
++    bool use_guanaco_streaming = false;
++    size_t guanaco_max_active_experts = 2;
++
+     llama_model_set_tensor_data_t set_tensor_data = nullptr;
+     void * set_tensor_data_ud = nullptr;
+ };
+@@ -120,6 +124,10 @@ struct llama_model_params {
+     int n_threads = 1;
+     int n_threads_batch = 1;
+ 
++    // Guanaco integration: enable expert weight streaming from disk
++    bool use_guanaco_streaming = false;
++    size_t guanaco_max_active_experts = 2;
++
+     // custom tensor data loader
+     llama_model_set_tensor_data_t set_tensor_data = nullptr;
+     void * set_tensor_data_ud = nullptr;
+@@ -380,6 +388,14 @@ LLAMA_API int llama_model_quantize(
+     void * progress_callback_user_data);
+ 
++// Guanaco integration: set the model hook for expert streaming
++LLAMA_API void llama_model_set_guanaco_hook(void* hook);
++
++// Guanaco integration: check if streaming is enabled
++LLAMA_API bool llama_model_use_guanaco_streaming(const struct llama_model* model);
++
+ // llama.cpp internal
+ LLAMA_API const char * llama_print_system_info(void);
+ 
+@@ -670,6 +686,10 @@ struct llama_model_loader {
+     // pointer to the llama_model_loader object
+     llama_model_loader * ml = nullptr;
+ 
++#ifdef GUANACO_ENABLED
++    // Guanaco integration: hook for expert weight streaming
++    struct guanaco_model_hook* guanaco_hook = nullptr;
++#endif
+     // llama_model_loader is not yet defined at this point, so we will set it after construction
+     llama_model_loader(
+@@ -730,6 +750,10 @@ struct llama_model_loader {
+     // convenience overload of create_tensor that doesn't require llama_model_loader
+     ggml_tensor * create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
+ 
++#ifdef GUANACO_ENABLED
++    // Guanaco integration: hook for expert weight streaming
++    struct guanaco_model_hook* get_guanaco_hook() { return guanaco_hook; }
++#endif
+     void load_stats  (llama_model_loader & ml) override;
+     void load_hparams(llama_model_loader & ml) override;
+     void load_vocab  (llama_model_loader & ml) override;
