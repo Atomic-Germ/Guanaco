@@ -24,7 +24,9 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
     GuanacoModelHookImpl(const char* path, size_t max_active_experts)
         : model_path(path ? path : "") {
         sl_config.gguf_path      = model_path;
-        sl_config.max_active_experts = (int)max_active_experts;
+        // -1 means "auto": keep a modest multiple of the router's top-k in
+        // RAM so hot experts stay resident while cold ones stream on demand.
+        sl_config.max_active_experts = (max_active_experts == size_t(-1)) ? 8 : (int)max_active_experts;
         sl_config.use_madvise   = true;
         sl_config.use_io_uring  = true;
         loader = std::make_unique<SteppeLoader>(sl_config);
@@ -58,6 +60,7 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
 
     void on_router_computed(int layer_idx, const int* expert_ids, int n) override {
         if (!loader || expert_ids == nullptr || n <= 0) return;
+        loader->record_routing(layer_idx, expert_ids, n);
         loader->prefetch_experts(layer_idx, expert_ids, n);
     }
 

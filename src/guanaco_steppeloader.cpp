@@ -531,6 +531,9 @@ void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
     t.num_experts    = num_experts;
     t.per_expert_bytes = byte_size / static_cast<size_t>(num_experts);
     t.loaded.assign(num_experts, false);
+    t.total_hits.assign(num_experts, 0);
+    t.window_hits.assign(num_experts, 0.0f);
+    t.pinned.assign(num_experts, false);
 
     // Sparse anonymous mapping: only the pages we pread() into ever
     // become resident, so unselected experts cost no RAM.
@@ -565,6 +568,115 @@ bool SteppeLoader::pread_full(off_t offset, void* dst, size_t len) {
     return true;
 }
 
+void SteppeLoader::record_routing(int layer, const int* expert_ids, int n) {
+    if (expert_ids == nullptr || n <= 0) return;
+
+    for (auto& kv : expert_tensors_) {
+        ExpertTensor& t = kv.second;
+        if (t.layer != layer || t.num_experts <= 0) continue;
+
+        for (int i = 0; i < n; ++i) {
+            int id = expert_ids[i];
+            if (id < 0 || id >= t.num_experts) continue;
+            ++t.total_hits[id];
+            t.window_hits[id] = t.window_hits[id] * kHitDecay_ + 1.0f;
+        }
+    }
+
+    ++routing_records_;
+    
+    if (routing_records_ == kWarmupLayers_) {
+        maybe_pin_hot_experts();
+    } else if (routing_records_ > kWarmupLayers_ && routing_records_ % kLogEveryLayers_ == 0) {
+        maybe_pin_hot_experts();
+        log_hot_summary();
+    }
+}
+
+void SteppeLoader::maybe_pin_hot_experts() {
+    for (auto& kv : expert_tensors_) {
+        ExpertTensor& t = kv.second;
+        if (t.num_experts <= 0) continue;
+
+        // Rank expert windowed hotness for this tensor.
+        std::vector<int> order(t.num_experts);
+        for (int i = 0; i < t.num_experts; ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](int a, int b) {
+            return t.window_hits[a] > t.window_hits[b];
+        });
+
+        // Pin the top-K experts (bounded by config), skipping those already
+        // pinned. A pinned expert is read once (below) and never evicted.
+        const int topk = config_.max_active_experts;
+        for (int rank = 0; rank < topk && rank < t.num_experts; ++rank) {
+            int id = order[rank];
+            if (t.pinned[id]) continue;
+            if (t.window_hits[id] <= 0.0f) break;  // no usage yet
+
+            if (t.slab && !t.loaded[id]) {
+                const off_t src = static_cast<off_t>(t.file_offset) + static_cast<off_t>(id) * t.per_expert_bytes;
+                void* dst = static_cast<char*>(t.slab) + static_cast<size_t>(id) * t.per_expert_bytes;
+#ifdef GUANACO_HAVE_IO_URING
+                if (uring_slab_) {
+                    std::vector<IoUringSlice> one = { { dst, t.per_expert_bytes, static_cast<int64_t>(src) } };
+                    if (!io_uring_slab_read(uring_slab_, fd_, one)) {
+                        if (!pread_full(src, dst, t.per_expert_bytes)) continue;
+                    }
+                } else
+#endif
+                {
+                    if (!pread_full(src, dst, t.per_expert_bytes)) continue;
+                }
+                t.loaded[id] = true;
+            }
+            t.pinned[id] = true;
+            ++pinned_total_;
+        }
+    }
+
+    if (routing_records_ >= kWarmupLayers_ && routing_records_ % kLogEveryLayers_ == 0) {
+        std::cout << "[Guanaco HerdCache] Hot experts pinned: " << pinned_total_
+                  << " total across " << expert_tensors_.size() << " tensors\n";
+    }
+}
+
+void SteppeLoader::log_hot_summary() {
+    // Report the single hottest expert per layer (cheap, informative).
+    std::cout << "[Guanaco HerdCache] Routing hotness (layer:expert window_hits):";
+    int printed = 0;
+    for (auto& kv : expert_tensors_) {
+        const ExpertTensor& t = kv.second;
+        if (t.num_experts <= 0) continue;
+        int best = 0;
+        for (int i = 1; i < t.num_experts; ++i) {
+            if (t.window_hits[i] > t.window_hits[best]) best = i;
+        }
+        if (t.window_hits[best] <= 0.0f) continue;
+        std::cout << " L" << t.layer << ":" << best << "=" << (int)t.window_hits[best];
+        if (++printed >= 8) break;  // keep the line short
+    }
+    std::cout << std::endl;
+}
+
+std::vector<SteppeLoader::HotExpertStats> SteppeLoader::get_hot_expert_stats() const {
+    std::vector<HotExpertStats> out;
+    for (const auto& kv : expert_tensors_) {
+        const ExpertTensor& t = kv.second;
+        for (int id = 0; id < t.num_experts; ++id) {
+            if (t.pinned[id] || t.window_hits[id] > 0.0f) {
+                HotExpertStats s;
+                s.layer       = t.layer;
+                s.expert      = id;
+                s.total_hits  = t.total_hits[id];
+                s.window_hits = t.window_hits[id];
+                s.pinned      = t.pinned[id];
+                out.push_back(s);
+            }
+        }
+    }
+    return out;
+}
+
 void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
     if (fd_ < 0 || expert_ids == nullptr || n <= 0) {
         return;
@@ -582,10 +694,11 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
         }
 
         // Deduplicate selected expert ids and only read the missing ones.
+        // Pinned (hot) experts stay loaded, so they are never re-read.
         std::unordered_set<int> want;
         for (int i = 0; i < n; ++i) {
             int id = expert_ids[i];
-            if (id >= 0 && id < t.num_experts && !t.loaded[id]) {
+            if (id >= 0 && id < t.num_experts && !t.loaded[id] && !t.pinned[id]) {
                 want.insert(id);
             }
         }

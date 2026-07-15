@@ -56,6 +56,9 @@ struct GUANACO_API ExpertTensor {
     size_t      per_expert_bytes = 0;   // byte_size / num_experts
     void *      slab            = nullptr;
     std::vector<bool> loaded;              // per-expert residency bits
+    std::vector<uint64_t> total_hits;      // cumulative router hits per expert
+    std::vector<float>   window_hits;     // decaying windowed hits (EWMA)
+    std::vector<bool>    pinned;          // hot experts kept resident
 };
 
 struct GUANACO_API SteppeLoaderConfig {
@@ -98,10 +101,26 @@ public:
     // Look up a tensor's parsed GGUF manifest entry (for file offsets).
     const ExpertManifestEntry* lookup_expert(const std::string& name) const;
 
+    // Record router decisions for `layer`. Accumulates per-expert hotness
+    // (EWMA window) and, once warmed up, permanently pins the hottest
+    // experts so their slab slices stay resident instead of being
+    // re-streamed from disk on every occurrence.
+    void record_routing(int layer, const int* expert_ids, int n);
+
     // Prefetch the given (router-selected) expert ids for every registered
     // expert tensor that belongs to `layer`. Synchronous pread into the
     // slabs at the correct fused-layout offsets.
     void prefetch_experts(int layer, const int* expert_ids, int n);
+
+    // Snapshot of the hottest experts per layer for diagnostics/logging.
+    struct HotExpertStats {
+        int      layer       = -1;
+        int      expert      = -1;
+        uint64_t total_hits  = 0;
+        float    window_hits = 0.0f;
+        bool     pinned      = false;
+    };
+    std::vector<HotExpertStats> get_hot_expert_stats() const;
 
     const std::vector<ExpertManifestEntry>& get_manifest() const { return manifest_; }
     const MoEModelConfig& get_model_config() const { return model_config_; }
@@ -132,8 +151,17 @@ private:
         std::unordered_map<std::string, std::array<int64_t, 4>>& out_dims,
         std::unordered_map<std::string, uint32_t>& out_n_dims);
     std::future<void> read_expert_async(const ExpertManifestEntry& entry,
-                                         std::shared_ptr<ExpertTensorBuffer> target_buf);
+                                        std::shared_ptr<ExpertTensorBuffer> target_buf);
     bool pread_full(off_t offset, void* dst, size_t len);
+
+    // Hot-expert pinning state.
+    static constexpr float   kHitDecay_   = 0.95f;   // EWMA decay per record_routing()
+    static constexpr size_t  kWarmupLayers_   = 200;  // per-layer records before pinning
+    static constexpr size_t  kLogEveryLayers_ = 400;  // summary cadence (per-layer records)
+    size_t                   routing_records_ = 0;
+    size_t                   pinned_total_    = 0;
+    void maybe_pin_hot_experts();
+    void log_hot_summary();
 };
 
 struct GUANACO_API HerdCacheConfig {
