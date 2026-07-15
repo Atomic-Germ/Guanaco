@@ -73,7 +73,8 @@ set(LLAMA_BUILD_SERVER ON  CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_APP    OFF CACHE BOOL "" FORCE)
 
 # Output goes to ${CMAKE_BINARY_DIR}/bin (guanaco/build/bin)
-# Set RPATH so tools pick up our patched libllama.so instead of system
+# Set RPATH so tools pick up our patched libllama.so AND libguanaco.so
+# (libguanaco.so is emitted to build/bin via LIBRARY_OUTPUT_DIRECTORY below)
 set(CMAKE_BUILD_RPATH  "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 add_subdirectory(${CMAKE_SOURCE_DIR}/../llama.cpp llama.cpp)
@@ -94,6 +95,7 @@ add_library(guanaco
     src/guanaco_router.cpp
     src/guanaco_executor.cpp
     src/guanaco_model_hook.cpp
+    src/guanaco_io_uring.cpp
 )
 
 target_include_directories(guanaco PUBLIC
@@ -117,6 +119,13 @@ if(BUILD_SHARED_LIBS)
         VISIBILITY_INLINES_HIDDEN 1
     )
 endif()
+
+# Emit libguanaco.so next to libllama.so so the build-tree RPATH finds it,
+# and install it alongside llama.cpp's libs.
+set_target_properties(guanaco PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+install(TARGETS guanaco LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 if(GUANACO_BUILD_EXAMPLES)
     add_executable(guanaco_example examples/guanaco_example.cpp)

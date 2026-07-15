@@ -1,0 +1,69 @@
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 3a469bc90..c6e62e97b 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -12,8 +12,13 @@
+ #include "llama-ext.h"
+ #include "llama.h"
+ 
++#ifdef GUANACO_ENABLED
++#include "guanaco/guanaco_model_hook.h"
++#endif
++
+ #include <cinttypes>
+ #include <cmath>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <stdexcept>
+@@ -3474,13 +3479,49 @@ llama_context_params llama_context_default_params() {
+ }
+ 
+ llama_context * llama_init_from_model(
+-                 llama_model * model,
++                llama_model * model,
+         llama_context_params   params) {
+     if (!model) {
+         LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
+         return nullptr;
+     }
+ 
++#ifdef GUANACO_ENABLED
++    // Router Prefetch: every time the MoE gating node (ffn_moe_topk-<il>)
++    // is computed, read the selected expert ids and pread only those
++    // expert slices from the GGUF into their slabs before mul_mat_id runs.
++    static auto guanaco_eval_callback = [](
++            struct ggml_tensor * t, bool ask, void * user_data) -> bool {
++        (void)ask;
++        if (ask) {
++            return true; // called before compute; nothing to do
++        }
++        auto * hook = static_cast<guanaco::GuanacoModelHook *>(user_data);
++        if (hook == nullptr || t == nullptr) {
++            return true;
++        }
++        const char * name = ggml_get_name(t);
++        if (name == nullptr || strncmp(name, "ffn_moe_topk", 12) != 0) {
++            return true;
++        }
++        // runtime name is "ffn_moe_topk-<il>" (layer suffix)
++        int layer = -1;
++        const char * dash = strrchr(name, '-');
++        if (dash != nullptr) {
++            layer = atoi(dash + 1);
++        }
++        const int n = (int)(t->ne[0] * t->ne[1]); // n_expert_used * n_tokens
++        hook->on_router_computed(layer, static_cast<const int *>(t->data), n);
++        return true;
++    };
++
++    if (static_cast<llama_model_base *>(model)->guanaco_hook != nullptr) {
++        params.cb_eval           = guanaco_eval_callback;
++        params.cb_eval_user_data = static_cast<llama_model_base *>(model)->guanaco_hook;
++    }
++#endif
++
++
+     if (params.n_batch == 0 && params.n_ubatch == 0) {
+         LLAMA_LOG_ERROR("%s: n_batch and n_ubatch cannot both be zero\n", __func__);
+         return nullptr;

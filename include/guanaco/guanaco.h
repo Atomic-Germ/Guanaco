@@ -44,6 +44,20 @@ struct GUANACO_API ExpertTensorBuffer {
     int layer_idx = -1;
 };
 
+// A fused expert tensor (e.g. blk.N.ffn_up_exps.weight) mirrored into a
+// sparse anonymous-mmap slab. Only the expert slices that the router
+// selects are ever paged in (via pread); the rest stay demand-zero.
+struct GUANACO_API ExpertTensor {
+    std::string name;
+    int         layer            = -1;
+    size_t      file_offset     = 0;   // absolute offset in the GGUF file
+    size_t      byte_size       = 0;   // total fused tensor size in bytes
+    int         num_experts     = 1;   // expert dimension of the fused tensor
+    size_t      per_expert_bytes = 0;   // byte_size / num_experts
+    void *      slab            = nullptr;
+    std::vector<bool> loaded;              // per-expert residency bits
+};
+
 struct GUANACO_API SteppeLoaderConfig {
     std::string gguf_path;
     int max_active_experts = 2;
@@ -72,6 +86,23 @@ public:
     // perform sequential read-ahead when experts are accessed randomly.
     void advise_experts_random();
 
+    // Register a fused expert tensor for slab redirection. Allocates a
+    // sparse anonymous-mmap slab mirroring the fused layout; only selected
+    // expert slices are ever paged in (via prefetch_experts).
+    void register_expert_tensor(const std::string& name, int layer,
+                              size_t file_offset, size_t byte_size, int num_experts);
+
+    // Pointer to the slab allocated for a registered expert tensor.
+    void* get_expert_tensor_data(const std::string& name);
+
+    // Look up a tensor's parsed GGUF manifest entry (for file offsets).
+    const ExpertManifestEntry* lookup_expert(const std::string& name) const;
+
+    // Prefetch the given (router-selected) expert ids for every registered
+    // expert tensor that belongs to `layer`. Synchronous pread into the
+    // slabs at the correct fused-layout offsets.
+    void prefetch_experts(int layer, const int* expert_ids, int n);
+
     const std::vector<ExpertManifestEntry>& get_manifest() const { return manifest_; }
     const MoEModelConfig& get_model_config() const { return model_config_; }
     
@@ -79,7 +110,7 @@ public:
                                        std::shared_ptr<ExpertTensorBuffer> target_buf);
     
     std::future<void> prefetch_experts(int layer_idx, const std::vector<int>& expert_indices,
-                                        const std::vector<std::shared_ptr<ExpertTensorBuffer>>& target_bufs);
+                                         const std::vector<std::shared_ptr<ExpertTensorBuffer>>& target_bufs);
 
     int get_fd() const { return fd_; }
 
@@ -89,7 +120,12 @@ private:
     std::vector<ExpertManifestEntry> manifest_;
     std::unordered_map<int, std::vector<ExpertManifestEntry>> layer_experts_;
     MoEModelConfig model_config_;
-    
+    std::unordered_map<std::string, ExpertTensor> expert_tensors_;
+
+#ifdef GUANACO_HAVE_IO_URING
+    void* uring_slab_ = nullptr;  // batched io_uring reader for slab prefetch
+#endif
+
     bool parse_gguf_manifest();
     bool parse_gguf_metadata();
     void parse_tensor_dims_from_file(
@@ -97,6 +133,7 @@ private:
         std::unordered_map<std::string, uint32_t>& out_n_dims);
     std::future<void> read_expert_async(const ExpertManifestEntry& entry,
                                          std::shared_ptr<ExpertTensorBuffer> target_buf);
+    bool pread_full(off_t offset, void* dst, size_t len);
 };
 
 struct GUANACO_API HerdCacheConfig {
@@ -229,6 +266,16 @@ private:
 GUANACO_API bool apply_madvise(void* addr, size_t length, int advice);
 GUANACO_API bool apply_madvise_random(void* addr, size_t length);
 GUANACO_API bool apply_madvise_willneed(void* addr, size_t length);
+
+// Batched async io_uring read interface used by slab prefetch.
+// Each slice is one contiguous expert region; all slices are submitted to the
+// kernel in a single io_uring batch and reaped together.
+#ifdef GUANACO_HAVE_IO_URING
+struct IoUringSlice { void* dst; size_t len; int64_t offset; };
+void* io_uring_slab_create(unsigned entries);
+void  io_uring_slab_destroy(void* ctx);
+bool  io_uring_slab_read(void* ctx, int fd, const std::vector<IoUringSlice>& slices);
+#endif
 GUANACO_API bool apply_madvise_dontneed(void* addr, size_t length);
 
 } // namespace guanaco

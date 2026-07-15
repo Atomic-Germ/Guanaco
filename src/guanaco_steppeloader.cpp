@@ -8,10 +8,22 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <utility>
 
 namespace guanaco {
 
-SteppeLoader::SteppeLoader(const SteppeLoaderConfig& config) : config_(config) {}
+SteppeLoader::SteppeLoader(const SteppeLoaderConfig& config) : config_(config) {
+#ifdef GUANACO_HAVE_IO_URING
+    if (config_.use_io_uring) {
+        uring_slab_ = io_uring_slab_create(config_.io_queue_depth);
+        if (uring_slab_) {
+            std::cerr << "[Guanaco Storage] io_uring prefetch enabled (queue=" << config_.io_queue_depth << ")\n";
+        } else {
+            std::cerr << "[Guanaco Storage] io_uring init failed; falling back to pread\n";
+        }
+    }
+#endif
+}
 
 SteppeLoader::~SteppeLoader() {
     shutdown();
@@ -34,6 +46,21 @@ bool SteppeLoader::initialize() {
 }
 
 void SteppeLoader::shutdown() {
+#ifdef GUANACO_HAVE_IO_URING
+    if (uring_slab_) {
+        io_uring_slab_destroy(uring_slab_);
+        uring_slab_ = nullptr;
+    }
+#endif
+
+    for (auto& kv : expert_tensors_) {
+        if (kv.second.slab != nullptr) {
+            munmap(kv.second.slab, kv.second.byte_size);
+            kv.second.slab = nullptr;
+        }
+    }
+    expert_tensors_.clear();
+
     if (fd_ >= 0) {
         close(fd_);
         fd_ = -1;
@@ -476,6 +503,133 @@ void SteppeLoader::advise_experts_random() {
 
     std::cout << "[Guanaco Storage] Applied MADV_RANDOM to " << advised
               << " expert regions" << std::endl;
+}
+
+const ExpertManifestEntry* SteppeLoader::lookup_expert(const std::string& name) const {
+    for (const auto& e : manifest_) {
+        if (e.tensor_name == name) {
+            return &e;
+        }
+    }
+    return nullptr;
+}
+
+void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
+                                            size_t file_offset, size_t byte_size, int num_experts) {
+    if (fd_ < 0 || byte_size == 0 || num_experts <= 0) {
+        return;
+    }
+    if (expert_tensors_.count(name)) {
+        return; // already registered
+    }
+
+    ExpertTensor t;
+    t.name            = name;
+    t.layer           = layer;
+    t.file_offset     = file_offset;
+    t.byte_size       = byte_size;
+    t.num_experts    = num_experts;
+    t.per_expert_bytes = byte_size / static_cast<size_t>(num_experts);
+    t.loaded.assign(num_experts, false);
+
+    // Sparse anonymous mapping: only the pages we pread() into ever
+    // become resident, so unselected experts cost no RAM.
+    void* slab = mmap(nullptr, byte_size, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (slab == MAP_FAILED) {
+        std::cerr << "[Guanaco Storage] Failed to allocate slab for " << name << std::endl;
+        return;
+    }
+    t.slab = slab;
+
+    expert_tensors_.emplace(name, std::move(t));
+    std::cout << "[Guanaco HerdCache] Slab ready for " << name
+              << " (" << num_experts << " experts, " << (byte_size / (1024*1024)) << " MB fused)\n";
+}
+
+void* SteppeLoader::get_expert_tensor_data(const std::string& name) {
+    auto it = expert_tensors_.find(name);
+    return it != expert_tensors_.end() ? it->second.slab : nullptr;
+}
+
+bool SteppeLoader::pread_full(off_t offset, void* dst, size_t len) {
+    size_t total = 0;
+    while (total < len) {
+        ssize_t n = pread(fd_, static_cast<char*>(dst) + total, len - total, offset + total);
+        if (n <= 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        total += static_cast<size_t>(n);
+    }
+    return true;
+}
+
+void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
+    if (fd_ < 0 || expert_ids == nullptr || n <= 0) {
+        return;
+    }
+
+#ifdef GUANACO_HAVE_IO_URING
+    std::vector<IoUringSlice> slices;
+    std::vector<std::pair<ExpertTensor*, int>> slice_owners;
+#endif
+
+    for (auto& kv : expert_tensors_) {
+        ExpertTensor& t = kv.second;
+        if (t.layer != layer || t.slab == nullptr || t.per_expert_bytes == 0) {
+            continue;
+        }
+
+        // Deduplicate selected expert ids and only read the missing ones.
+        std::unordered_set<int> want;
+        for (int i = 0; i < n; ++i) {
+            int id = expert_ids[i];
+            if (id >= 0 && id < t.num_experts && !t.loaded[id]) {
+                want.insert(id);
+            }
+        }
+        if (want.empty()) {
+            continue;
+        }
+
+        for (int id : want) {
+            const off_t src = static_cast<off_t>(t.file_offset) + static_cast<off_t>(id) * t.per_expert_bytes;
+            void*  dst = static_cast<char*>(t.slab) + static_cast<size_t>(id) * t.per_expert_bytes;
+#ifdef GUANACO_HAVE_IO_URING
+            if (uring_slab_) {
+                slices.push_back({ dst, t.per_expert_bytes, static_cast<int64_t>(src) });
+                slice_owners.push_back({ &t, id });
+            } else
+#endif
+            {
+                if (pread_full(src, dst, t.per_expert_bytes)) {
+                    t.loaded[id] = true;
+                }
+            }
+        }
+    }
+
+#ifdef GUANACO_HAVE_IO_URING
+    if (uring_slab_ && !slices.empty()) {
+        if (io_uring_slab_read(uring_slab_, fd_, slices)) {
+            for (auto& p : slice_owners) {
+                p.first->loaded[p.second] = true;
+            }
+        } else {
+            // Fallback: read each slice synchronously.
+            for (auto& p : slice_owners) {
+                ExpertTensor& t = *p.first;
+                int id = p.second;
+                const off_t src = static_cast<off_t>(t.file_offset) + static_cast<off_t>(id) * t.per_expert_bytes;
+                void* dst = static_cast<char*>(t.slab) + static_cast<size_t>(id) * t.per_expert_bytes;
+                if (pread_full(src, dst, t.per_expert_bytes)) {
+                    t.loaded[id] = true;
+                }
+            }
+        }
+    }
+#endif
 }
 
 } // namespace guanaco

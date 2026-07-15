@@ -16,6 +16,8 @@
     #define GUANACO_API __attribute__((visibility("default")))
 #endif
 
+#include "guanaco/guanaco.h"
+
 // Forward declarations for llama.cpp types
 struct llama_model_loader;
 struct llama_model;
@@ -28,38 +30,27 @@ namespace guanaco {
 struct GUANACO_API GuanacoModelHook {
     virtual ~GuanacoModelHook() = default;
     
-    // Initialize hook during model loading
+    // Initialize hook during model loading (parses GGUF manifest)
     virtual void initialize(void* ml, void* model) = 0;
     
-    // Check if expert tensor should be streamed
-    virtual bool should_stream_expert(const char* tensor_name, int layer_idx, int expert_idx) = 0;
+    // Look up a tensor's parsed GGUF manifest entry (file offset, etc.)
+    virtual const ExpertManifestEntry* lookup_expert(const char* tensor_name) const = 0;
     
-    // Register expert tensor with hook
-    virtual void register_tensor(const char* tensor_name, int layer_idx, int expert_idx) = 0;
+    // Register a fused expert tensor for slab redirection. Allocates a
+    // sparse slab mirroring the fused layout; only selected expert
+    // slices are ever paged in.
+    virtual void register_expert_tensor(const char* tensor_name, int layer_idx,
+                                   size_t file_offset, size_t byte_size, int num_experts) = 0;
     
-    // Register all expert tensors for a layer
-    virtual void register_expert_tensors(void* layer, int layer_idx, void* ml) = 0;
+    // Pointer to the slab allocated for a registered expert tensor.
+    virtual void* get_expert_tensor_data(const char* tensor_name) = 0;
     
-    // Get buffer for expert tensor data
-    virtual void* get_expert_buffer(int layer_idx, int expert_idx, size_t size) = 0;
-    
-    // Redirect tensor data pointer to streaming buffer
-    virtual void redirect_tensor_data(void* tensor, int layer_idx, int expert_idx, int tensor_type) = 0;
-    
-    // Prefetch experts for a layer
-    virtual void prefetch_experts(int layer_idx, const int* expert_ids, int num_experts) = 0;
-    
-    // Called when router computes logits
-    virtual void on_router_computed(int layer_idx, const float* logits, int num_experts, int top_k, int num_tokens) = 0;
-    
-    // Release expert buffers after computation
-    virtual void release_experts(int layer_idx, const int* expert_ids, int num_experts) = 0;
+    // Called when the router selects experts for a layer (post-compute of
+    // the ffn_moe_topk node). Prefetches those experts into their slabs.
+    virtual void on_router_computed(int layer_idx, const int* expert_ids, int n) = 0;
     
     // Apply MADV_RANDOM to expert regions
     virtual void advise_random_access(void* ml) = 0;
-    
-    // Skip loading expert tensor data
-    virtual void skip_expert_tensor_load(void* ml) = 0;
 };
 
 // Factory function to create a model hook
