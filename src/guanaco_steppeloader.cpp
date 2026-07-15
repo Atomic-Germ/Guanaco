@@ -24,22 +24,12 @@ bool SteppeLoader::initialize() {
         return false;
     }
 
-    if (config_.use_madvise) {
-        struct stat st;
-        fstat(fd_, &st);
-        void* addr = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd_, 0);
-        if (addr != MAP_FAILED) {
-            madvise(addr, st.st_size, MADV_RANDOM);
-            munmap(addr, st.st_size);
-        }
-    }
-
     if (!parse_gguf_manifest()) {
         return false;
     }
     
     parse_gguf_metadata();
-    
+
     return true;
 }
 
@@ -438,11 +428,54 @@ std::future<void> SteppeLoader::read_expert_async(const ExpertManifestEntry& ent
             madvise(target_buf->data.data(), target_buf->data.size(), MADV_WILLNEED);
         }
 
-        target_buf->is_ready = true;
-        promise->set_value();
+    target_buf->is_ready = true;
+    promise->set_value();
     }).detach();
 
     return future;
+}
+
+void SteppeLoader::advise_experts_random() {
+    if (fd_ < 0 || manifest_.empty()) {
+        return;
+    }
+
+    struct stat st;
+    if (fstat(fd_, &st) != 0) {
+        return;
+    }
+
+    void* addr = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd_, 0);
+    if (addr == MAP_FAILED) {
+        return;
+    }
+
+    const long page_size = sysconf(_SC_PAGESIZE);
+    const uintptr_t page_mask = ~((uintptr_t)page_size - 1);
+
+    size_t advised = 0;
+    for (const auto& entry : manifest_) {
+        // Only expert tensors (fused blocks or individual experts)
+        if (entry.expert_idx < 0 && entry.num_experts_in_tensor <= 1) {
+            continue;
+        }
+        if (entry.byte_size == 0) {
+            continue;
+        }
+
+        uintptr_t region_start = (uintptr_t)addr + entry.file_offset;
+        uintptr_t aligned_start = region_start & page_mask;
+        size_t size = entry.byte_size + (region_start - aligned_start);
+
+        if (madvise((void*)aligned_start, size, MADV_RANDOM) == 0) {
+            ++advised;
+        }
+    }
+
+    munmap(addr, st.st_size);
+
+    std::cout << "[Guanaco Storage] Applied MADV_RANDOM to " << advised
+              << " expert regions" << std::endl;
 }
 
 } // namespace guanaco

@@ -68,6 +68,10 @@ public:
     bool initialize();
     void shutdown();
 
+    // Apply MADV_RANDOM to expert tensor regions so the OS kernel does not
+    // perform sequential read-ahead when experts are accessed randomly.
+    void advise_experts_random();
+
     const std::vector<ExpertManifestEntry>& get_manifest() const { return manifest_; }
     const MoEModelConfig& get_model_config() const { return model_config_; }
     

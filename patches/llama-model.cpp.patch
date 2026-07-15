@@ -1,8 +1,18 @@
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index d87481381..973233ded 100644
+index d87481381..ce160670d 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -2316,6 +2316,10 @@ llama_model_params llama_model_default_params() {
+@@ -1,5 +1,9 @@
+ #include "llama-model.h"
+ 
++#ifdef GUANACO_ENABLED
++#include "guanaco/guanaco_model_hook.h"
++#endif
++
+ #include "llama-arch.h"
+ #include "llama-ext.h"
+ #include "llama-hparams.h"
+@@ -2316,6 +2320,10 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -13,3 +23,19 @@ index d87481381..973233ded 100644
      };
  
      return result;
+@@ -2726,6 +2734,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
+     TENSOR_SKIP           (llama_model_loader::TENSOR_SKIP),
+     TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL) {}
+ 
++llama_model_base::~llama_model_base() {
++#ifdef GUANACO_ENABLED
++    if (guanaco_hook != nullptr) {
++        guanaco::destroy_guanaco_model_hook(guanaco_hook);
++        guanaco_hook = nullptr;
++    }
++#endif
++}
++
+ ggml_tensor * llama_model_base::create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
+     GGML_ASSERT(ml != nullptr);
+     return create_tensor(*ml, tn, ne, flags);

@@ -1,11 +1,20 @@
 diff --git a/src/llama.cpp b/src/llama.cpp
-index 0de6048f2..290c24b4a 100644
+index 0de6048f2..f8581b8fa 100644
 --- a/src/llama.cpp
 +++ b/src/llama.cpp
-@@ -10,6 +10,10 @@
+@@ -10,6 +10,19 @@
  #include "llama-model-saver.h"
  #include "llama-model.h"
  
++#ifdef GUANACO_ENABLED
++#include "guanaco/guanaco.h"
++#include "guanaco/guanaco_model_hook.h"
++#endif
++
++#ifdef GUANACO_ENABLED
++#include "guanaco/guanaco.h"
++#endif
++
 +#ifdef GUANACO_ENABLED
 +#include "guanaco/guanaco.h"
 +#endif
@@ -13,7 +22,26 @@ index 0de6048f2..290c24b4a 100644
  #include "ggml.h"
  #include "ggml-cpp.h"
  #include "ggml-backend.h"
-@@ -427,6 +431,9 @@ struct llama_model * llama_model_load_from_file(
+@@ -331,6 +344,18 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
+             return {-2, nullptr};
+         }
+ 
++#ifdef GUANACO_ENABLED
++        if (params.use_guanaco_streaming || getenv("GUANACO_STREAMING") != nullptr) {
++            fprintf(stderr, "%s: loading model '%s' with GUANACO disk streaming\n", __func__, fname.c_str());
++            model->guanaco_hook = guanaco::create_guanaco_model_hook(fname.c_str(), params.guanaco_max_experts);
++            if (model->guanaco_hook != nullptr) {
++                auto* hook = static_cast<guanaco::GuanacoModelHook*>(model->guanaco_hook);
++                hook->initialize(&ml, model);
++                hook->advise_random_access(&ml);
++            }
++        }
++#endif
++
+         return {0, model_ptr.release()};
+     } catch (const std::exception & err) {
+         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
+@@ -427,6 +452,9 @@ struct llama_model * llama_model_load_from_file(
          const char * path_model,
          struct llama_model_params params) {
      std::vector<std::string> splits = {};
@@ -23,7 +51,7 @@ index 0de6048f2..290c24b4a 100644
      return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, /*file*/ nullptr, params);
  }
  
-@@ -579,3 +586,17 @@ const char * llama_print_system_info(void) {
+@@ -579,3 +607,17 @@ const char * llama_print_system_info(void) {
      return s.c_str();
  }
  
