@@ -158,7 +158,6 @@ preinstall/fast:
 
 # clear depends
 depend:
-	$(CMAKE_COMMAND) -P /home/atomic-germ/Projects/Guanaco/guanaco/build/CMakeFiles/VerifyGlobs.cmake
 	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 1
 .PHONY : depend
 
@@ -228,32 +227,6 @@ ggml-cpu/fast:
 .PHONY : ggml-cpu/fast
 
 #=============================================================================
-# Target rules for targets named ggml-vulkan
-
-# Build rule for target.
-ggml-vulkan: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 ggml-vulkan
-.PHONY : ggml-vulkan
-
-# fast build rule for target.
-ggml-vulkan/fast:
-	$(MAKE) $(MAKESILENT) -f llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/build.make llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/build
-.PHONY : ggml-vulkan/fast
-
-#=============================================================================
-# Target rules for targets named vulkan-shaders-gen
-
-# Build rule for target.
-vulkan-shaders-gen: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 vulkan-shaders-gen
-.PHONY : vulkan-shaders-gen
-
-# fast build rule for target.
-vulkan-shaders-gen/fast:
-	$(MAKE) $(MAKESILENT) -f llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/vulkan-shaders-gen.dir/build.make llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/vulkan-shaders-gen.dir/build
-.PHONY : vulkan-shaders-gen/fast
-
-#=============================================================================
 # Target rules for targets named llama
 
 # Build rule for target.
@@ -265,6 +238,513 @@ llama: cmake_check_build_system
 llama/fast:
 	$(MAKE) $(MAKESILENT) -f llama.cpp/src/CMakeFiles/llama.dir/build.make llama.cpp/src/CMakeFiles/llama.dir/build
 .PHONY : llama/fast
+
+#=============================================================================
+# Target rules for targets named llama-common-base
+
+# Build rule for target.
+llama-common-base: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-common-base
+.PHONY : llama-common-base
+
+# fast build rule for target.
+llama-common-base/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/common/CMakeFiles/llama-common-base.dir/build.make llama.cpp/common/CMakeFiles/llama-common-base.dir/build
+.PHONY : llama-common-base/fast
+
+#=============================================================================
+# Target rules for targets named llama-common
+
+# Build rule for target.
+llama-common: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-common
+.PHONY : llama-common
+
+# fast build rule for target.
+llama-common/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/common/CMakeFiles/llama-common.dir/build.make llama.cpp/common/CMakeFiles/llama-common.dir/build
+.PHONY : llama-common/fast
+
+#=============================================================================
+# Target rules for targets named cpp-httplib
+
+# Build rule for target.
+cpp-httplib: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 cpp-httplib
+.PHONY : cpp-httplib
+
+# fast build rule for target.
+cpp-httplib/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/vendor/cpp-httplib/CMakeFiles/cpp-httplib.dir/build.make llama.cpp/vendor/cpp-httplib/CMakeFiles/cpp-httplib.dir/build
+.PHONY : cpp-httplib/fast
+
+#=============================================================================
+# Target rules for targets named llama-batched-bench-impl
+
+# Build rule for target.
+llama-batched-bench-impl: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-batched-bench-impl
+.PHONY : llama-batched-bench-impl
+
+# fast build rule for target.
+llama-batched-bench-impl/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/batched-bench/CMakeFiles/llama-batched-bench-impl.dir/build.make llama.cpp/tools/batched-bench/CMakeFiles/llama-batched-bench-impl.dir/build
+.PHONY : llama-batched-bench-impl/fast
+
+#=============================================================================
+# Target rules for targets named llama-batched-bench
+
+# Build rule for target.
+llama-batched-bench: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-batched-bench
+.PHONY : llama-batched-bench
+
+# fast build rule for target.
+llama-batched-bench/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/batched-bench/CMakeFiles/llama-batched-bench.dir/build.make llama.cpp/tools/batched-bench/CMakeFiles/llama-batched-bench.dir/build
+.PHONY : llama-batched-bench/fast
+
+#=============================================================================
+# Target rules for targets named llama-gguf-split
+
+# Build rule for target.
+llama-gguf-split: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-gguf-split
+.PHONY : llama-gguf-split
+
+# fast build rule for target.
+llama-gguf-split/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/gguf-split/CMakeFiles/llama-gguf-split.dir/build.make llama.cpp/tools/gguf-split/CMakeFiles/llama-gguf-split.dir/build
+.PHONY : llama-gguf-split/fast
+
+#=============================================================================
+# Target rules for targets named llama-imatrix
+
+# Build rule for target.
+llama-imatrix: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-imatrix
+.PHONY : llama-imatrix
+
+# fast build rule for target.
+llama-imatrix/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/imatrix/CMakeFiles/llama-imatrix.dir/build.make llama.cpp/tools/imatrix/CMakeFiles/llama-imatrix.dir/build
+.PHONY : llama-imatrix/fast
+
+#=============================================================================
+# Target rules for targets named llama-bench-impl
+
+# Build rule for target.
+llama-bench-impl: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-bench-impl
+.PHONY : llama-bench-impl
+
+# fast build rule for target.
+llama-bench-impl/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/llama-bench/CMakeFiles/llama-bench-impl.dir/build.make llama.cpp/tools/llama-bench/CMakeFiles/llama-bench-impl.dir/build
+.PHONY : llama-bench-impl/fast
+
+#=============================================================================
+# Target rules for targets named llama-bench
+
+# Build rule for target.
+llama-bench: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-bench
+.PHONY : llama-bench
+
+# fast build rule for target.
+llama-bench/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/llama-bench/CMakeFiles/llama-bench.dir/build.make llama.cpp/tools/llama-bench/CMakeFiles/llama-bench.dir/build
+.PHONY : llama-bench/fast
+
+#=============================================================================
+# Target rules for targets named llama-completion-impl
+
+# Build rule for target.
+llama-completion-impl: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-completion-impl
+.PHONY : llama-completion-impl
+
+# fast build rule for target.
+llama-completion-impl/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/completion/CMakeFiles/llama-completion-impl.dir/build.make llama.cpp/tools/completion/CMakeFiles/llama-completion-impl.dir/build
+.PHONY : llama-completion-impl/fast
+
+#=============================================================================
+# Target rules for targets named llama-completion
+
+# Build rule for target.
+llama-completion: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-completion
+.PHONY : llama-completion
+
+# fast build rule for target.
+llama-completion/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/completion/CMakeFiles/llama-completion.dir/build.make llama.cpp/tools/completion/CMakeFiles/llama-completion.dir/build
+.PHONY : llama-completion/fast
+
+#=============================================================================
+# Target rules for targets named llama-perplexity-impl
+
+# Build rule for target.
+llama-perplexity-impl: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-perplexity-impl
+.PHONY : llama-perplexity-impl
+
+# fast build rule for target.
+llama-perplexity-impl/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/perplexity/CMakeFiles/llama-perplexity-impl.dir/build.make llama.cpp/tools/perplexity/CMakeFiles/llama-perplexity-impl.dir/build
+.PHONY : llama-perplexity-impl/fast
+
+#=============================================================================
+# Target rules for targets named llama-perplexity
+
+# Build rule for target.
+llama-perplexity: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-perplexity
+.PHONY : llama-perplexity
+
+# fast build rule for target.
+llama-perplexity/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/perplexity/CMakeFiles/llama-perplexity.dir/build.make llama.cpp/tools/perplexity/CMakeFiles/llama-perplexity.dir/build
+.PHONY : llama-perplexity/fast
+
+#=============================================================================
+# Target rules for targets named llama-quantize-impl
+
+# Build rule for target.
+llama-quantize-impl: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-quantize-impl
+.PHONY : llama-quantize-impl
+
+# fast build rule for target.
+llama-quantize-impl/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/quantize/CMakeFiles/llama-quantize-impl.dir/build.make llama.cpp/tools/quantize/CMakeFiles/llama-quantize-impl.dir/build
+.PHONY : llama-quantize-impl/fast
+
+#=============================================================================
+# Target rules for targets named llama-quantize
+
+# Build rule for target.
+llama-quantize: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-quantize
+.PHONY : llama-quantize
+
+# fast build rule for target.
+llama-quantize/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/quantize/CMakeFiles/llama-quantize.dir/build.make llama.cpp/tools/quantize/CMakeFiles/llama-quantize.dir/build
+.PHONY : llama-quantize/fast
+
+#=============================================================================
+# Target rules for targets named llama-ui-embed
+
+# Build rule for target.
+llama-ui-embed: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-ui-embed
+.PHONY : llama-ui-embed
+
+# fast build rule for target.
+llama-ui-embed/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/ui/CMakeFiles/llama-ui-embed.dir/build.make llama.cpp/tools/ui/CMakeFiles/llama-ui-embed.dir/build
+.PHONY : llama-ui-embed/fast
+
+#=============================================================================
+# Target rules for targets named llama-ui-assets
+
+# Build rule for target.
+llama-ui-assets: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-ui-assets
+.PHONY : llama-ui-assets
+
+# fast build rule for target.
+llama-ui-assets/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/ui/CMakeFiles/llama-ui-assets.dir/build.make llama.cpp/tools/ui/CMakeFiles/llama-ui-assets.dir/build
+.PHONY : llama-ui-assets/fast
+
+#=============================================================================
+# Target rules for targets named llama-ui
+
+# Build rule for target.
+llama-ui: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-ui
+.PHONY : llama-ui
+
+# fast build rule for target.
+llama-ui/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/ui/CMakeFiles/llama-ui.dir/build.make llama.cpp/tools/ui/CMakeFiles/llama-ui.dir/build
+.PHONY : llama-ui/fast
+
+#=============================================================================
+# Target rules for targets named llama-cli-impl
+
+# Build rule for target.
+llama-cli-impl: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-cli-impl
+.PHONY : llama-cli-impl
+
+# fast build rule for target.
+llama-cli-impl/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/cli/CMakeFiles/llama-cli-impl.dir/build.make llama.cpp/tools/cli/CMakeFiles/llama-cli-impl.dir/build
+.PHONY : llama-cli-impl/fast
+
+#=============================================================================
+# Target rules for targets named llama-cli
+
+# Build rule for target.
+llama-cli: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-cli
+.PHONY : llama-cli
+
+# fast build rule for target.
+llama-cli/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/cli/CMakeFiles/llama-cli.dir/build.make llama.cpp/tools/cli/CMakeFiles/llama-cli.dir/build
+.PHONY : llama-cli/fast
+
+#=============================================================================
+# Target rules for targets named server-context
+
+# Build rule for target.
+server-context: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 server-context
+.PHONY : server-context
+
+# fast build rule for target.
+server-context/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/server/CMakeFiles/server-context.dir/build.make llama.cpp/tools/server/CMakeFiles/server-context.dir/build
+.PHONY : server-context/fast
+
+#=============================================================================
+# Target rules for targets named llama-server-impl
+
+# Build rule for target.
+llama-server-impl: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-server-impl
+.PHONY : llama-server-impl
+
+# fast build rule for target.
+llama-server-impl/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/server/CMakeFiles/llama-server-impl.dir/build.make llama.cpp/tools/server/CMakeFiles/llama-server-impl.dir/build
+.PHONY : llama-server-impl/fast
+
+#=============================================================================
+# Target rules for targets named llama-server
+
+# Build rule for target.
+llama-server: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-server
+.PHONY : llama-server
+
+# fast build rule for target.
+llama-server/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/server/CMakeFiles/llama-server.dir/build.make llama.cpp/tools/server/CMakeFiles/llama-server.dir/build
+.PHONY : llama-server/fast
+
+#=============================================================================
+# Target rules for targets named llama-tokenize
+
+# Build rule for target.
+llama-tokenize: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-tokenize
+.PHONY : llama-tokenize
+
+# fast build rule for target.
+llama-tokenize/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/tokenize/CMakeFiles/llama-tokenize.dir/build.make llama.cpp/tools/tokenize/CMakeFiles/llama-tokenize.dir/build
+.PHONY : llama-tokenize/fast
+
+#=============================================================================
+# Target rules for targets named llama-debug-template-parser
+
+# Build rule for target.
+llama-debug-template-parser: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-debug-template-parser
+.PHONY : llama-debug-template-parser
+
+# fast build rule for target.
+llama-debug-template-parser/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/parser/CMakeFiles/llama-debug-template-parser.dir/build.make llama.cpp/tools/parser/CMakeFiles/llama-debug-template-parser.dir/build
+.PHONY : llama-debug-template-parser/fast
+
+#=============================================================================
+# Target rules for targets named llama-template-analysis
+
+# Build rule for target.
+llama-template-analysis: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-template-analysis
+.PHONY : llama-template-analysis
+
+# fast build rule for target.
+llama-template-analysis/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/parser/CMakeFiles/llama-template-analysis.dir/build.make llama.cpp/tools/parser/CMakeFiles/llama-template-analysis.dir/build
+.PHONY : llama-template-analysis/fast
+
+#=============================================================================
+# Target rules for targets named llama-tts
+
+# Build rule for target.
+llama-tts: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-tts
+.PHONY : llama-tts
+
+# fast build rule for target.
+llama-tts/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/tts/CMakeFiles/llama-tts.dir/build.make llama.cpp/tools/tts/CMakeFiles/llama-tts.dir/build
+.PHONY : llama-tts/fast
+
+#=============================================================================
+# Target rules for targets named mtmd
+
+# Build rule for target.
+mtmd: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 mtmd
+.PHONY : mtmd
+
+# fast build rule for target.
+mtmd/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/mtmd/CMakeFiles/mtmd.dir/build.make llama.cpp/tools/mtmd/CMakeFiles/mtmd.dir/build
+.PHONY : mtmd/fast
+
+#=============================================================================
+# Target rules for targets named llama-llava-cli
+
+# Build rule for target.
+llama-llava-cli: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-llava-cli
+.PHONY : llama-llava-cli
+
+# fast build rule for target.
+llama-llava-cli/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/mtmd/CMakeFiles/llama-llava-cli.dir/build.make llama.cpp/tools/mtmd/CMakeFiles/llama-llava-cli.dir/build
+.PHONY : llama-llava-cli/fast
+
+#=============================================================================
+# Target rules for targets named llama-gemma3-cli
+
+# Build rule for target.
+llama-gemma3-cli: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-gemma3-cli
+.PHONY : llama-gemma3-cli
+
+# fast build rule for target.
+llama-gemma3-cli/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/mtmd/CMakeFiles/llama-gemma3-cli.dir/build.make llama.cpp/tools/mtmd/CMakeFiles/llama-gemma3-cli.dir/build
+.PHONY : llama-gemma3-cli/fast
+
+#=============================================================================
+# Target rules for targets named llama-minicpmv-cli
+
+# Build rule for target.
+llama-minicpmv-cli: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-minicpmv-cli
+.PHONY : llama-minicpmv-cli
+
+# fast build rule for target.
+llama-minicpmv-cli/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/mtmd/CMakeFiles/llama-minicpmv-cli.dir/build.make llama.cpp/tools/mtmd/CMakeFiles/llama-minicpmv-cli.dir/build
+.PHONY : llama-minicpmv-cli/fast
+
+#=============================================================================
+# Target rules for targets named llama-qwen2vl-cli
+
+# Build rule for target.
+llama-qwen2vl-cli: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-qwen2vl-cli
+.PHONY : llama-qwen2vl-cli
+
+# fast build rule for target.
+llama-qwen2vl-cli/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/mtmd/CMakeFiles/llama-qwen2vl-cli.dir/build.make llama.cpp/tools/mtmd/CMakeFiles/llama-qwen2vl-cli.dir/build
+.PHONY : llama-qwen2vl-cli/fast
+
+#=============================================================================
+# Target rules for targets named llama-mtmd-cli
+
+# Build rule for target.
+llama-mtmd-cli: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-mtmd-cli
+.PHONY : llama-mtmd-cli
+
+# fast build rule for target.
+llama-mtmd-cli/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/mtmd/CMakeFiles/llama-mtmd-cli.dir/build.make llama.cpp/tools/mtmd/CMakeFiles/llama-mtmd-cli.dir/build
+.PHONY : llama-mtmd-cli/fast
+
+#=============================================================================
+# Target rules for targets named llama-mtmd-debug
+
+# Build rule for target.
+llama-mtmd-debug: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-mtmd-debug
+.PHONY : llama-mtmd-debug
+
+# fast build rule for target.
+llama-mtmd-debug/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/mtmd/CMakeFiles/llama-mtmd-debug.dir/build.make llama.cpp/tools/mtmd/CMakeFiles/llama-mtmd-debug.dir/build
+.PHONY : llama-mtmd-debug/fast
+
+#=============================================================================
+# Target rules for targets named llama-cvector-generator
+
+# Build rule for target.
+llama-cvector-generator: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-cvector-generator
+.PHONY : llama-cvector-generator
+
+# fast build rule for target.
+llama-cvector-generator/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/cvector-generator/CMakeFiles/llama-cvector-generator.dir/build.make llama.cpp/tools/cvector-generator/CMakeFiles/llama-cvector-generator.dir/build
+.PHONY : llama-cvector-generator/fast
+
+#=============================================================================
+# Target rules for targets named llama-export-lora
+
+# Build rule for target.
+llama-export-lora: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-export-lora
+.PHONY : llama-export-lora
+
+# fast build rule for target.
+llama-export-lora/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/export-lora/CMakeFiles/llama-export-lora.dir/build.make llama.cpp/tools/export-lora/CMakeFiles/llama-export-lora.dir/build
+.PHONY : llama-export-lora/fast
+
+#=============================================================================
+# Target rules for targets named llama-fit-params-impl
+
+# Build rule for target.
+llama-fit-params-impl: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-fit-params-impl
+.PHONY : llama-fit-params-impl
+
+# fast build rule for target.
+llama-fit-params-impl/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/fit-params/CMakeFiles/llama-fit-params-impl.dir/build.make llama.cpp/tools/fit-params/CMakeFiles/llama-fit-params-impl.dir/build
+.PHONY : llama-fit-params-impl/fast
+
+#=============================================================================
+# Target rules for targets named llama-fit-params
+
+# Build rule for target.
+llama-fit-params: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-fit-params
+.PHONY : llama-fit-params
+
+# fast build rule for target.
+llama-fit-params/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/fit-params/CMakeFiles/llama-fit-params.dir/build.make llama.cpp/tools/fit-params/CMakeFiles/llama-fit-params.dir/build
+.PHONY : llama-fit-params/fast
+
+#=============================================================================
+# Target rules for targets named llama-results
+
+# Build rule for target.
+llama-results: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 llama-results
+.PHONY : llama-results
+
+# fast build rule for target.
+llama-results/fast:
+	$(MAKE) $(MAKESILENT) -f llama.cpp/tools/results/CMakeFiles/llama-results.dir/build.make llama.cpp/tools/results/CMakeFiles/llama-results.dir/build
+.PHONY : llama-results/fast
 
 examples/guanaco_example.o: examples/guanaco_example.cpp.o
 .PHONY : examples/guanaco_example.o
@@ -446,14 +926,51 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
-	@echo "... vulkan-shaders-gen"
+	@echo "... llama-ui-assets"
+	@echo "... cpp-httplib"
 	@echo "... ggml"
 	@echo "... ggml-base"
 	@echo "... ggml-cpu"
-	@echo "... ggml-vulkan"
 	@echo "... guanaco"
 	@echo "... guanaco_example"
 	@echo "... llama"
+	@echo "... llama-batched-bench"
+	@echo "... llama-batched-bench-impl"
+	@echo "... llama-bench"
+	@echo "... llama-bench-impl"
+	@echo "... llama-cli"
+	@echo "... llama-cli-impl"
+	@echo "... llama-common"
+	@echo "... llama-common-base"
+	@echo "... llama-completion"
+	@echo "... llama-completion-impl"
+	@echo "... llama-cvector-generator"
+	@echo "... llama-debug-template-parser"
+	@echo "... llama-export-lora"
+	@echo "... llama-fit-params"
+	@echo "... llama-fit-params-impl"
+	@echo "... llama-gemma3-cli"
+	@echo "... llama-gguf-split"
+	@echo "... llama-imatrix"
+	@echo "... llama-llava-cli"
+	@echo "... llama-minicpmv-cli"
+	@echo "... llama-mtmd-cli"
+	@echo "... llama-mtmd-debug"
+	@echo "... llama-perplexity"
+	@echo "... llama-perplexity-impl"
+	@echo "... llama-quantize"
+	@echo "... llama-quantize-impl"
+	@echo "... llama-qwen2vl-cli"
+	@echo "... llama-results"
+	@echo "... llama-server"
+	@echo "... llama-server-impl"
+	@echo "... llama-template-analysis"
+	@echo "... llama-tokenize"
+	@echo "... llama-tts"
+	@echo "... llama-ui"
+	@echo "... llama-ui-embed"
+	@echo "... mtmd"
+	@echo "... server-context"
 	@echo "... examples/guanaco_example.o"
 	@echo "... examples/guanaco_example.i"
 	@echo "... examples/guanaco_example.s"
@@ -486,7 +1003,6 @@ help:
 # No rule that depends on this can have commands that come from listfiles
 # because they might be regenerated.
 cmake_check_build_system:
-	$(CMAKE_COMMAND) -P /home/atomic-germ/Projects/Guanaco/guanaco/build/CMakeFiles/VerifyGlobs.cmake
 	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 0
 .PHONY : cmake_check_build_system
 

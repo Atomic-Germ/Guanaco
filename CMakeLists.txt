@@ -64,15 +64,18 @@ if(GUANACO_PATCH_LLAMA_CPP)
 endif()
 
 # === Build llama.cpp as a subdirectory ===
-# Disable everything except the core llama library
-set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+# Enable tools and server so they link against the patched libllama
+set(LLAMA_BUILD_COMMON ON  CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TOOLS  ON  CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_APP OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER ON  CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_APP    OFF CACHE BOOL "" FORCE)
 
 # Output goes to ${CMAKE_BINARY_DIR}/bin (guanaco/build/bin)
+# Set RPATH so tools pick up our patched libllama.so instead of system
+set(CMAKE_BUILD_RPATH  "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 add_subdirectory(${CMAKE_SOURCE_DIR}/../llama.cpp llama.cpp)
 
 # Add guanaco include path so llama.cpp can find guanaco/guanaco.h when patched
@@ -103,10 +106,6 @@ if(GUANACO_IO_URING_FOUND)
 endif()
 
 target_compile_definitions(guanaco PUBLIC GUANACO_API_EXPORT)
-if(GUANACO_PATCH_LLAMA_CPP)
-    target_compile_definitions(guanaco PUBLIC GUANACO_ENABLED)
-    target_compile_definitions(llama PRIVATE GUANACO_ENABLED)
-endif()
 
 if(BUILD_SHARED_LIBS)
     set_target_properties(guanaco PROPERTIES
