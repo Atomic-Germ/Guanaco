@@ -70,6 +70,14 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
             loader->advise_experts_random();
         }
     }
+
+    // Called once all expert tensors are registered: seed hot-expert
+    // pinning from a sibling imatrix prior (if present), then pin the
+    // calibration-hot experts so they are resident before token 0.
+    void on_expert_tensors_registered() override {
+        if (!loader) return;
+        loader->load_imatrix_prior(model_path);
+    }
 };
 
 void* create_guanaco_model_hook(const char* model_path, size_t max_active_experts) {

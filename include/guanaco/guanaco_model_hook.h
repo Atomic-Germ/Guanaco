@@ -48,6 +48,12 @@ struct GUANACO_API GuanacoModelHook {
     // Called when the router selects experts for a layer (post-compute of
     // the ffn_moe_topk node). Prefetches those experts into their slabs.
     virtual void on_router_computed(int layer_idx, const int* expert_ids, int n) = 0;
+
+    // Called by llama.cpp once all expert tensors have been registered with
+    // the SteppeLoader. Triggers imatrix-prior seeding and the initial
+    // (cold-start) hot-expert pin pass so pinned experts are resident before
+    // the first token is processed.
+    virtual void on_expert_tensors_registered() = 0;
     
     // Apply MADV_RANDOM to expert regions
     virtual void advise_random_access(void* ml) = 0;

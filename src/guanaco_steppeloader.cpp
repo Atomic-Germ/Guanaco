@@ -9,6 +9,12 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <utility>
+#include <string>
+
+// imatrix prior: reuse llama.cpp's common loader to read a sibling
+// "<model>.imatrix.gguf". It exposes, per expert tensor, a `counts`
+// vector sized to the expert dimension.
+#include "common/imatrix-loader.h"
 
 namespace guanaco {
 
@@ -640,8 +646,118 @@ void SteppeLoader::maybe_pin_hot_experts() {
     }
 }
 
-void SteppeLoader::log_hot_summary() {
-    // Report the single hottest expert per layer (cheap, informative).
+size_t SteppeLoader::load_imatrix_prior(const std::string& model_path) {
+    if (imatrix_seeded_ || expert_tensors_.empty()) {
+        return 0;
+    }
+
+    // Resolve the sibling imatrix file: "<path>.imatrix.gguf".
+    // Mirror the convention used by llama.cpp's imatrix/quantize tools
+    // (e.g. model.gguf -> model.gguf.imatrix.gguf).
+    std::string imatrix_path = model_path + ".imatrix.gguf";
+
+    struct stat st{};
+    if (stat(imatrix_path.c_str(), &st) != 0) {
+        std::cout << "[Guanaco HerdCache] No imatrix prior found ("
+                  << imatrix_path << "); cold-start pinning will use runtime stats.\n";
+        imatrix_seeded_ = true;  // don't retry
+        return 0;
+    }
+
+    common_imatrix imatrix{};
+    if (!common_imatrix_load(imatrix_path, imatrix)) {
+        std::cerr << "[Guanaco HerdCache] Failed to parse imatrix prior: "
+                  << imatrix_path << "\n";
+        imatrix_seeded_ = true;
+        return 0;
+    }
+
+    size_t seeded = 0;
+    uint64_t total_observations = 0;
+    for (const auto& kv : imatrix.entries) {
+        const std::string& entry_name = kv.first;
+        const common_imatrix_entry& entry = kv.second;
+        auto it = expert_tensors_.find(entry_name);
+        if (it == expert_tensors_.end()) {
+            continue;  // not a fused expert tensor we redirect
+        }
+        ExpertTensor& t = it->second;
+        const int n = std::min<int>((int)entry.counts.size(), t.num_experts);
+        for (int ex = 0; ex < n; ++ex) {
+            const int64_t c = entry.counts[ex];
+            if (c <= 0) continue;
+            // Seed the durable total; this is the calibration-time selection
+            // frequency and directly drives the initial pin pass below.
+            t.total_hits[ex] += static_cast<uint64_t>(c);
+            total_observations += static_cast<uint64_t>(c);
+            ++seeded;
+        }
+    }
+
+    std::cout << "[Guanaco HerdCache] imatrix prior loaded: " << imatrix_path
+              << " (" << total_observations << " expert selections across "
+              << seeded << " expert slots)\n";
+
+    imatrix_seeded_ = true;
+
+    // Immediately pin the calibration-hot experts so they are resident from
+    // token 0, before any runtime routing statistics exist.
+    if (seeded > 0) {
+        pin_from_seeded_totals();
+    }
+    return seeded;
+}
+
+void SteppeLoader::pin_from_seeded_totals() {
+    size_t pinned_before = pinned_total_;
+    for (auto& kv : expert_tensors_) {
+        ExpertTensor& t = kv.second;
+        if (t.num_experts <= 0) continue;
+
+        // Rank by seeded total (calibration frequency); fall back to the
+        // EWMA window if runtime stats exist.
+        std::vector<int> order(t.num_experts);
+        for (int i = 0; i < t.num_experts; ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](int a, int b) {
+            return t.total_hits[a] > t.total_hits[b];
+        });
+
+        const int topk = config_.max_active_experts;
+        for (int rank = 0; rank < topk && rank < t.num_experts; ++rank) {
+            int id = order[rank];
+            if (t.pinned[id]) continue;
+            if (t.total_hits[id] <= 0) break;  // no calibration usage
+
+            if (t.slab && !t.loaded[id]) {
+                const off_t src = static_cast<off_t>(t.file_offset) + static_cast<off_t>(id) * t.per_expert_bytes;
+                void* dst = static_cast<char*>(t.slab) + static_cast<size_t>(id) * t.per_expert_bytes;
+#ifdef GUANACO_HAVE_IO_URING
+                if (uring_slab_) {
+                    std::vector<IoUringSlice> one = { { dst, t.per_expert_bytes, static_cast<int64_t>(src) } };
+                    if (!io_uring_slab_read(uring_slab_, fd_, one)) {
+                        if (!pread_full(src, dst, t.per_expert_bytes)) continue;
+                    }
+                } else
+#endif
+                {
+                    if (!pread_full(src, dst, t.per_expert_bytes)) continue;
+                }
+                t.loaded[id] = true;
+            }
+            t.pinned[id] = true;
+            ++pinned_total_;
+        }
+    }
+
+    if (pinned_total_ > pinned_before) {
+        std::cout << "[Guanaco HerdCache] imatrix prior pinned "
+                  << (pinned_total_ - pinned_before)
+                  << " experts (" << pinned_total_ << " total across "
+                  << expert_tensors_.size() << " tensors)\n";
+    }
+}
+
+void SteppeLoader::log_hot_summary() {    // Report the single hottest expert per layer (cheap, informative).
     std::cout << "[Guanaco HerdCache] Routing hotness (layer:expert window_hits):";
     int printed = 0;
     for (auto& kv : expert_tensors_) {

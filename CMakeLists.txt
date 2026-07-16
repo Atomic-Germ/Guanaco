@@ -100,6 +100,18 @@ add_library(guanaco
 
 target_include_directories(guanaco PUBLIC
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/../llama.cpp
+    ${CMAKE_SOURCE_DIR}/../llama.cpp/common
+)
+
+# imatrix prior: compile llama.cpp's imatrix-loader.cpp directly into guanaco
+# (instead of linking libllama-common, which would create a circular
+# dependency llama -> guanaco -> llama-common -> llama). A minimal shim
+# provides the few common.h/log.h macros it uses.
+target_sources(guanaco PRIVATE ${CMAKE_SOURCE_DIR}/../llama.cpp/common/imatrix-loader.cpp)
+target_include_directories(guanaco PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/imatrix_shim
+    ${CMAKE_SOURCE_DIR}/../llama.cpp/common
 )
 
 target_link_libraries(guanaco PUBLIC

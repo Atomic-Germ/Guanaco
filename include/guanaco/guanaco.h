@@ -101,6 +101,17 @@ public:
     // Look up a tensor's parsed GGUF manifest entry (for file offsets).
     const ExpertManifestEntry* lookup_expert(const std::string& name) const;
 
+    // Seed per-expert hotness from a sibling "<model>.imatrix.gguf" prior.
+    // The imatrix file stores, per expert tensor, a `counts` vector of how
+    // often each expert was selected during calibration. Injecting those
+    // totals into total_hits[] gives hot-expert pinning a correct head start
+    // from token 0, before any runtime routing statistics exist. If no
+    // sibling imatrix exists the loader silently falls back to runtime-only
+    // pinning (the existing behavior). Returns the number of experts whose
+    // totals were seeded. Subsequent calls to on_expert_tensors_ready()
+    // perform the initial pin pass.
+    size_t load_imatrix_prior(const std::string& model_path);
+
     // Record router decisions for `layer`. Accumulates per-expert hotness
     // (EWMA window) and, once warmed up, permanently pins the hottest
     // experts so their slab slices stay resident instead of being
@@ -160,7 +171,9 @@ private:
     static constexpr size_t  kLogEveryLayers_ = 400;  // summary cadence (per-layer records)
     size_t                   routing_records_ = 0;
     size_t                   pinned_total_    = 0;
+    bool                    imatrix_seeded_  = false;
     void maybe_pin_hot_experts();
+    void pin_from_seeded_totals();   // initial pin pass driven by imatrix prior
     void log_hot_summary();
 };
 
