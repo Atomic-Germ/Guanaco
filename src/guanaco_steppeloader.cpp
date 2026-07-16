@@ -590,12 +590,17 @@ void SteppeLoader::record_routing(int layer, const int* expert_ids, int n) {
     }
 
     ++routing_records_;
-    
+
     if (routing_records_ == kWarmupLayers_) {
         maybe_pin_hot_experts();
     } else if (routing_records_ > kWarmupLayers_ && routing_records_ % kLogEveryLayers_ == 0) {
         maybe_pin_hot_experts();
         log_hot_summary();
+    }
+
+    // Periodic pin-cache hit-rate report (independent cadence).
+    if (prefetch_calls_ > 0 && prefetch_calls_ % kPinRateEvery_ == 0) {
+        log_pin_rate();
     }
 }
 
@@ -774,6 +779,18 @@ void SteppeLoader::log_hot_summary() {    // Report the single hottest expert pe
     std::cout << std::endl;
 }
 
+void SteppeLoader::log_pin_rate() {
+    const uint64_t total = pin_hits_ + warm_hits_ + disk_miss_;
+    if (total == 0) return;
+    const uint64_t resident = pin_hits_ + warm_hits_;  // no disk read needed
+    const int pct = (int)(100ULL * resident / total);
+    const int ppct = (int)(100ULL * pin_hits_ / total);  // fully pinned (hot) share
+    std::cout << "[Guanaco HerdCache] pin cache: " << pct << "% resident ("
+              << ppct << "% hot-pinned), " << resident << "/" << total
+              << " expert accesses, pinned=" << pinned_total_
+              << " across " << expert_tensors_.size() << " tensors\n";
+}
+
 std::vector<SteppeLoader::HotExpertStats> SteppeLoader::get_hot_expert_stats() const {
     std::vector<HotExpertStats> out;
     for (const auto& kv : expert_tensors_) {
@@ -798,6 +815,8 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
         return;
     }
 
+    ++prefetch_calls_;
+
 #ifdef GUANACO_HAVE_IO_URING
     std::vector<IoUringSlice> slices;
     std::vector<std::pair<ExpertTensor*, int>> slice_owners;
@@ -809,12 +828,21 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
             continue;
         }
 
-        // Deduplicate selected expert ids and only read the missing ones.
-        // Pinned (hot) experts stay loaded, so they are never re-read.
+        // Classify each router-selected expert for the pin-cache metric,
+        // then deduplicate the ones that still need a disk read.
+        //  - pinned: hot expert, already resident, zero disk I/O
+        //  - loaded: warm slice from a previous read, still resident
+        //  - otherwise: requires a fresh disk read this call
         std::unordered_set<int> want;
         for (int i = 0; i < n; ++i) {
             int id = expert_ids[i];
-            if (id >= 0 && id < t.num_experts && !t.loaded[id] && !t.pinned[id]) {
+            if (id < 0 || id >= t.num_experts) continue;
+            if (t.pinned[id]) {
+                ++pin_hits_;
+            } else if (t.loaded[id]) {
+                ++warm_hits_;
+            } else {
+                ++disk_miss_;
                 want.insert(id);
             }
         }

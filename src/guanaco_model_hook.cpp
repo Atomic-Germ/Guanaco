@@ -26,10 +26,23 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
         sl_config.gguf_path      = model_path;
         // -1 means "auto": keep a modest multiple of the router's top-k in
         // RAM so hot experts stay resident while cold ones stream on demand.
-        sl_config.max_active_experts = (max_active_experts == size_t(-1)) ? 8 : (int)max_active_experts;
+        // The GUANACO_MAX_EXPERTS env var overrides the API/default value,
+        // letting users tune how many hot experts stay pinned per tensor.
+        int resolved = (max_active_experts == size_t(-1)) ? 8 : (int)max_active_experts;
+        const char* env_val = std::getenv("GUANACO_MAX_EXPERTS");
+        if (env_val != nullptr) {
+            int env_int = std::atoi(env_val);
+            if (env_int > 0) {
+                resolved = env_int;
+            }
+        }
+        sl_config.max_active_experts = resolved;
         sl_config.use_madvise   = true;
         sl_config.use_io_uring  = true;
         loader = std::make_unique<SteppeLoader>(sl_config);
+        std::cout << "[Guanaco HerdCache] pin budget (max_active_experts) = "
+                  << resolved << " experts per tensor"
+                  << (env_val ? " [from GUANACO_MAX_EXPERTS]" : "") << "\n";
     }
 
     ~GuanacoModelHookImpl() override = default;

@@ -169,12 +169,21 @@ private:
     static constexpr float   kHitDecay_   = 0.95f;   // EWMA decay per record_routing()
     static constexpr size_t  kWarmupLayers_   = 200;  // per-layer records before pinning
     static constexpr size_t  kLogEveryLayers_ = 400;  // summary cadence (per-layer records)
+    static constexpr size_t  kPinRateEvery_   = 50;   // pin-cache hit-rate log cadence (calls)
     size_t                   routing_records_ = 0;
     size_t                   pinned_total_    = 0;
     bool                    imatrix_seeded_  = false;
+    // Pin-cache hit-rate instrumentation: counts of router-selected expert
+    // accesses that were served by an already-pinned (hot) or already-loaded
+    // (warm) slice versus ones that required a fresh disk read.
+    uint64_t                 pin_hits_   = 0;  // served by a pinned expert
+    uint64_t                 warm_hits_  = 0;  // served by an already-loaded (non-pinned) slice
+    uint64_t                 disk_miss_  = 0;  // required a disk read
+    uint64_t                 prefetch_calls_ = 0;
     void maybe_pin_hot_experts();
     void pin_from_seeded_totals();   // initial pin pass driven by imatrix prior
     void log_hot_summary();
+    void log_pin_rate();
 };
 
 struct GUANACO_API HerdCacheConfig {
