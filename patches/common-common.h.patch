@@ -1,0 +1,16 @@
+diff --git a/common/common.h b/common/common.h
+index 7ed1a9827..0d2e7c65f 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -574,6 +574,11 @@ struct common_params {
+     bool use_mmap          = true;  // enable mmap to use filesystem cache
+     bool use_direct_io     = false; // read from disk without buffering
+     bool use_mlock         = false; // use mlock to keep model in memory
++
++    // Guanaco disk-streaming for MoE experts: keep only a small set of hot
++    // experts resident in RAM and stream the rest from NVMe on demand.
++    bool   use_guanaco_streaming = false; // enable Guanaco disk streaming
++    int32_t guanaco_max_experts  = -1;    // max hot experts pinned per tensor (-1 = auto)
+     bool verbose_prompt    = false; // print prompt tokens before generation
+     bool display_prompt    = true;  // print prompt before generation
+     bool no_kv_offload     = false; // disable KV offloading
