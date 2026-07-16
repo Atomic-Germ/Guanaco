@@ -52,6 +52,8 @@ bool SteppeLoader::initialize() {
 }
 
 void SteppeLoader::shutdown() {
+    log_final_summary();
+
 #ifdef GUANACO_HAVE_IO_URING
     if (uring_slab_) {
         io_uring_slab_destroy(uring_slab_);
@@ -642,6 +644,7 @@ void SteppeLoader::maybe_pin_hot_experts() {
             }
             t.pinned[id] = true;
             ++pinned_total_;
+            ++pinned_current_;
         }
     }
 
@@ -751,6 +754,7 @@ void SteppeLoader::pin_from_seeded_totals() {
             }
             t.pinned[id] = true;
             ++pinned_total_;
+            ++pinned_current_;
         }
     }
 
@@ -789,6 +793,32 @@ void SteppeLoader::log_pin_rate() {
               << ppct << "% hot-pinned), " << resident << "/" << total
               << " expert accesses, pinned=" << pinned_total_
               << " across " << expert_tensors_.size() << " tensors\n";
+}
+
+void SteppeLoader::log_final_summary() {
+    // Only emit after real work; the hook is also destroyed transiently
+    // during model-fit before any expert runs, which would print noise.
+    if (prefetch_calls_ == 0) return;
+
+    const uint64_t total = pin_hits_ + warm_hits_ + disk_miss_;
+    const uint64_t resident = pin_hits_ + warm_hits_;
+    const int pct = total ? (int)(100ULL * resident / total) : 0;
+    const int ppct = total ? (int)(100ULL * pin_hits_ / total) : 0;
+
+    const size_t n_tensors = expert_tensors_.size();
+    const int per_tensor = n_tensors ? (int)(pinned_current_ / n_tensors) : 0;
+
+    std::cout << "[Guanaco HerdCache] final: pin budget="
+              << config_.max_active_experts
+              << " per tensor, experts pinned=" << pinned_current_
+              << " (" << per_tensor << " avg / tensor across " << n_tensors
+              << " tensors)"
+              << ", pin cache=" << pct << "% resident (" << ppct
+              << "% hot-pinned)"
+              << ", " << total << " expert accesses over "
+              << prefetch_calls_ << " prefetch calls"
+              << (imatrix_seeded_ ? ", imatrix prior used" : "")
+              << "\n";
 }
 
 std::vector<SteppeLoader::HotExpertStats> SteppeLoader::get_hot_expert_stats() const {

@@ -171,7 +171,8 @@ private:
     static constexpr size_t  kLogEveryLayers_ = 400;  // summary cadence (per-layer records)
     static constexpr size_t  kPinRateEvery_   = 50;   // pin-cache hit-rate log cadence (calls)
     size_t                   routing_records_ = 0;
-    size_t                   pinned_total_    = 0;
+    size_t                   pinned_total_    = 0;   // cumulative pin events
+    size_t                   pinned_current_ = 0;   // distinct experts pinned now
     bool                    imatrix_seeded_  = false;
     // Pin-cache hit-rate instrumentation: counts of router-selected expert
     // accesses that were served by an already-pinned (hot) or already-loaded
@@ -184,6 +185,7 @@ private:
     void pin_from_seeded_totals();   // initial pin pass driven by imatrix prior
     void log_hot_summary();
     void log_pin_rate();
+    void log_final_summary();        // one-line end-of-run report
 };
 
 struct GUANACO_API HerdCacheConfig {
