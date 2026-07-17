@@ -1,5 +1,5 @@
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index d87481381..9350a97d4 100644
+index d87481381..ee5deef86 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1,5 +1,9 @@
@@ -12,7 +12,7 @@ index d87481381..9350a97d4 100644
  #include "llama-arch.h"
  #include "llama-ext.h"
  #include "llama-hparams.h"
-@@ -1631,6 +1635,47 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1631,6 +1635,70 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
          }
      }
  
@@ -45,7 +45,30 @@ index d87481381..9350a97d4 100644
 +                if (num_experts <= 1) {
 +                    continue;
 +                }
-+                hook->register_expert_tensor(name, e->layer_idx, e->file_offset, ggml_nbytes(t), num_experts);
++                // Safety: only redirect tensors whose expert count matches our
++                // parsed GGUF manifest and whose bytes divide evenly per
++                // expert. Models where a non-routed tensor happens to contain
++                // "exps.weight" (e.g. shared-expert or cascade blocks) would
++                // otherwise get a broken slab and corrupt inference. In that
++                // case leave ggml's normal mmap in place (safe fallback).
++                const size_t nb = ggml_nbytes(t);
++                if (e->num_experts_in_tensor != num_experts ||
++                    num_experts <= 0 || nb == 0 || nb % (size_t)num_experts != 0) {
++                    fprintf(stderr, "%s: guanaco skipping '%s' (manifest experts=%d, tensor experts=%d, bytes=%zu) - not a cleanly-routed expert tensor\n",
++                            __func__, name, e->num_experts_in_tensor, num_experts, nb);
++                    continue;
++                }
++                // MXFP4 (microscaling FP4) stores each expert's weights with
++                // block scales in a layout our flat per-expert slab copy does
++                // not reproduce correctly, which corrupts inference. Leave
++                // such tensors on ggml's normal mmap (correct, just not
++                // streamed) until the slice layout is supported.
++                if (t->type == GGML_TYPE_MXFP4) {
++                    fprintf(stderr, "%s: guanaco skipping '%s' (type=MXFP4) - streaming unsupported for this quant; using mmap\n",
++                            __func__, name);
++                    continue;
++                }
++                hook->register_expert_tensor(name, e->layer_idx, e->file_offset, nb, num_experts);
 +                t->data   = hook->get_expert_tensor_data(name);
 +                t->buffer = nullptr;
 +            }
@@ -60,7 +83,7 @@ index d87481381..9350a97d4 100644
      if (use_mmap_buffer) {
          for (auto & mapping : ml.mappings) {
              pimpl->mappings.emplace_back(std::move(mapping));
-@@ -2316,6 +2361,10 @@ llama_model_params llama_model_default_params() {
+@@ -2316,6 +2384,10 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -71,7 +94,7 @@ index d87481381..9350a97d4 100644
      };
  
      return result;
-@@ -2726,6 +2775,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
+@@ -2726,6 +2798,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
      TENSOR_SKIP           (llama_model_loader::TENSOR_SKIP),
      TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL) {}
  

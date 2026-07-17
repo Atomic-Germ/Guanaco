@@ -179,9 +179,10 @@ private:
     std::future<void> read_expert_async(const ExpertManifestEntry& entry,
                                          std::shared_ptr<ExpertTensorBuffer> target_buf);
     bool pread_full(off_t offset, void* dst, size_t len);
-    // Drop the kernel page-cache copy of a slab slice after it is copied in,
-    // so the OS does not double-cache streamed expert weights.
-    void drop_slice_page_cache(void* dst, size_t len);
+    // Drop the kernel page-cache copy of a streamed slice's source bytes
+    // (on the GGUF fd) after it is copied into the slab. This releases the
+    // shared file cache without touching the anonymous slab itself.
+    void drop_slice_page_cache(off_t src_offset, size_t len);
 
     // Hot-expert pinning state.
     static constexpr float   kHitDecay_   = 0.95f;   // EWMA decay per record_routing()
@@ -348,8 +349,7 @@ GUANACO_API bool apply_madvise_willneed(void* addr, size_t length);
 struct IoUringSlice { void* dst; size_t len; int64_t offset; };
 void* io_uring_slab_create(unsigned entries);
 void  io_uring_slab_destroy(void* ctx);
-bool  io_uring_slab_read(void* ctx, int fd, const std::vector<IoUringSlice>& slices);
+ bool  io_uring_slab_read(void* ctx, int fd, const std::vector<IoUringSlice>& slices);
 #endif
-GUANACO_API bool apply_madvise_dontneed(void* addr, size_t length);
 
 } // namespace guanaco

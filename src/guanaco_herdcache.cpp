@@ -27,7 +27,7 @@ std::shared_ptr<ExpertTensorBuffer> HerdCache::allocate_slot(int layer_idx, int 
     active_experts_[key] = buf;
     update_lru(key);
     
-    std::cout << "[Guanaco Cache] Allocated slot for Layer " << layer_idx 
+    std::cerr << "[Guanaco Cache] Allocated slot for Layer " << layer_idx 
               << " Expert " << expert_idx << " (active: " << active_experts_.size() << ")" << std::endl;
     
     return buf;
@@ -98,7 +98,7 @@ void HerdCache::evict_lru() {
         if (config_.use_madvise && it->second && !it->second->data.empty()) {
             madvise(it->second->data.data(), it->second->data.size(), MADV_DONTNEED);
         }
-        std::cout << "[Guanaco Cache] Evicted Layer " << key.layer_idx 
+        std::cerr << "[Guanaco Cache] Evicted Layer " << key.layer_idx 
                   << " Expert " << key.expert_idx << std::endl;
         active_experts_.erase(it);
     }

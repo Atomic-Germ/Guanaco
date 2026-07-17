@@ -176,7 +176,7 @@ bool SteppeLoader::parse_gguf_manifest() {
 
     gguf_free(ctx);
     
-    std::cout << "[Guanaco Storage] Parsed " << manifest_.size() << " expert tensors across " 
+    std::cerr << "[Guanaco Storage] Parsed " << manifest_.size() << " expert tensors across " 
               << layer_experts_.size() << " layers" << std::endl;
     
     return true;
@@ -366,7 +366,7 @@ bool SteppeLoader::parse_gguf_metadata() {
         model_config_.num_hidden_layers = layer_experts_.size();
     }
 
-    std::cout << "[Guanaco Storage] Model config: " << model_config_.architecture 
+    std::cerr << "[Guanaco Storage] Model config: " << model_config_.architecture 
               << ", experts=" << model_config_.num_experts 
               << ", top_k=" << model_config_.num_experts_per_tok
               << ", layers=" << model_config_.num_hidden_layers
@@ -509,7 +509,7 @@ void SteppeLoader::advise_experts_random() {
 
     munmap(addr, st.st_size);
 
-    std::cout << "[Guanaco Storage] Applied MADV_RANDOM to " << advised
+    std::cerr << "[Guanaco Storage] Applied MADV_RANDOM to " << advised
               << " expert regions" << std::endl;
 }
 
@@ -525,6 +525,12 @@ const ExpertManifestEntry* SteppeLoader::lookup_expert(const std::string& name) 
 void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
                                             size_t file_offset, size_t byte_size, int num_experts) {
     if (fd_ < 0 || byte_size == 0 || num_experts <= 0) {
+        return;
+    }
+    // Defense in depth: the per-expert slice must divide evenly, otherwise
+    // the pread offsets would be misaligned and corrupt adjacent experts.
+    // Callers (llama-model.cpp) pre-check this, but skip if it doesn't hold.
+    if (byte_size % static_cast<size_t>(num_experts) != 0) {
         return;
     }
     if (expert_tensors_.count(name)) {
@@ -555,7 +561,7 @@ void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
     t.slab = slab;
 
     expert_tensors_.emplace(name, std::move(t));
-    std::cout << "[Guanaco HerdCache] Slab ready for " << name
+    std::cerr << "[Guanaco HerdCache] Slab ready for " << name
               << " (" << num_experts << " experts, " << (byte_size / (1024*1024)) << " MB fused)\n";
 }
 
@@ -577,23 +583,14 @@ bool SteppeLoader::pread_full(off_t offset, void* dst, size_t len) {
     return true;
 }
 
-// After a slice is copied into its slab, drop the kernel page-cache copy so
-// the OS does not double-cache the weights (avoids the mmap-RSS blowup that
-// otherwise grows peak RAM to the whole model). Mirrors colibri's
-// posix_fadvise(DONTNEED) on every streamed expert.
-void SteppeLoader::drop_slice_page_cache(void* dst, size_t len) {
-    if (!config_.dontneed || len == 0) return;
-    apply_madvise_dontneed(dst, len);
-}
-
-bool apply_madvise_dontneed(void* addr, size_t length) {
-    if (addr == nullptr || length == 0) return false;
-    // Align down to page so we never partially drop a neighbor's pages.
-    const long page = sysconf(_SC_PAGESIZE);
-    const uintptr_t mask = ~((uintptr_t)page - 1);
-    void* base = (void*)((uintptr_t)addr & mask);
-    size_t len = length + ((uintptr_t)addr - (uintptr_t)base);
-    return madvise(base, len, MADV_DONTNEED) == 0;
+// After a slice is copied into its slab via pread, advise the kernel to drop
+// its copy of the source pages from the file page cache. This is the safe
+// analog of colibri's posix_fadvise(DONTNEED): it releases the shared file
+// cache, NOT the anonymous slab (MADV_DONTNEED on an anonymous mapping would
+// zero our just-loaded weights and corrupt inference).
+void SteppeLoader::drop_slice_page_cache(off_t src_offset, size_t len) {
+    if (!config_.dontneed || len == 0 || fd_ < 0) return;
+    posix_fadvise(fd_, src_offset, (off_t)len, POSIX_FADV_DONTNEED);
 }
 
 void SteppeLoader::record_routing(int layer, const int* expert_ids, int n) {
@@ -736,7 +733,7 @@ void SteppeLoader::maybe_pin_hot_experts() {
                     if (!pread_full(src, dst, t.per_expert_bytes)) continue;
                 }
                 t.loaded[id] = true;
-                drop_slice_page_cache(dst, t.per_expert_bytes);
+                drop_slice_page_cache(src, t.per_expert_bytes);
             }
             t.pinned[id] = true;
             ++pinned_total_;
@@ -745,7 +742,7 @@ void SteppeLoader::maybe_pin_hot_experts() {
     }
 
     if (routing_records_ >= kWarmupLayers_ && routing_records_ % kLogEveryLayers_ == 0) {
-        std::cout << "[Guanaco HerdCache] Hot experts pinned: " << pinned_total_
+        std::cerr << "[Guanaco HerdCache] Hot experts pinned: " << pinned_total_
                   << " total across " << expert_tensors_.size() << " tensors\n";
     }
 }
@@ -757,7 +754,7 @@ size_t SteppeLoader::load_imatrix_prior(const std::string& model_path) {
     imatrix_seeded_ = true;  // don't retry
 
     if (!config_.use_imatrix) {
-        std::cout << "[Guanaco HerdCache] imatrix prior disabled (GUANACO_IMATRIX=0); "
+        std::cerr << "[Guanaco HerdCache] imatrix prior disabled (GUANACO_IMATRIX=0); "
                   << "cold-start pinning will use runtime stats.\n";
         return 0;
     }
@@ -769,7 +766,7 @@ size_t SteppeLoader::load_imatrix_prior(const std::string& model_path) {
 
     struct stat st{};
     if (stat(imatrix_path.c_str(), &st) != 0) {
-        std::cout << "[Guanaco HerdCache] No imatrix prior found ("
+        std::cerr << "[Guanaco HerdCache] No imatrix prior found ("
                   << imatrix_path << "); cold-start pinning will use runtime stats.\n";
         imatrix_seeded_ = true;  // don't retry
         return 0;
@@ -805,7 +802,7 @@ size_t SteppeLoader::load_imatrix_prior(const std::string& model_path) {
         }
     }
 
-    std::cout << "[Guanaco HerdCache] imatrix prior loaded: " << imatrix_path
+    std::cerr << "[Guanaco HerdCache] imatrix prior loaded: " << imatrix_path
               << " (" << total_observations << " expert selections across "
               << seeded << " expert slots)\n";
 
@@ -852,7 +849,7 @@ void SteppeLoader::pin_from_seeded_totals() {
                     if (!pread_full(src, dst, t.per_expert_bytes)) continue;
                 }
                 t.loaded[id] = true;
-                drop_slice_page_cache(dst, t.per_expert_bytes);
+                drop_slice_page_cache(src, t.per_expert_bytes);
             }
             t.pinned[id] = true;
             ++pinned_total_;
@@ -861,7 +858,7 @@ void SteppeLoader::pin_from_seeded_totals() {
     }
 
     if (pinned_total_ > pinned_before) {
-        std::cout << "[Guanaco HerdCache] imatrix prior pinned "
+        std::cerr << "[Guanaco HerdCache] imatrix prior pinned "
                   << (pinned_total_ - pinned_before)
                   << " experts (" << pinned_total_ << " total across "
                   << expert_tensors_.size() << " tensors)\n";
@@ -869,7 +866,7 @@ void SteppeLoader::pin_from_seeded_totals() {
 }
 
 void SteppeLoader::log_hot_summary() {    // Report the single hottest expert per layer (cheap, informative).
-    std::cout << "[Guanaco HerdCache] Routing hotness (layer:expert window_hits):";
+    std::cerr << "[Guanaco HerdCache] Routing hotness (layer:expert window_hits):";
     int printed = 0;
     for (auto& kv : expert_tensors_) {
         const ExpertTensor& t = kv.second;
@@ -879,10 +876,10 @@ void SteppeLoader::log_hot_summary() {    // Report the single hottest expert pe
             if (t.window_hits[i] > t.window_hits[best]) best = i;
         }
         if (t.window_hits[best] <= 0.0f) continue;
-        std::cout << " L" << t.layer << ":" << best << "=" << (int)t.window_hits[best];
+        std::cerr << " L" << t.layer << ":" << best << "=" << (int)t.window_hits[best];
         if (++printed >= 8) break;  // keep the line short
     }
-    std::cout << std::endl;
+    std::cerr << std::endl;
 }
 
 void SteppeLoader::log_pin_rate() {
@@ -891,7 +888,7 @@ void SteppeLoader::log_pin_rate() {
     const uint64_t resident = pin_hits_ + warm_hits_;  // no disk read needed
     const int pct = (int)(100ULL * resident / total);
     const int ppct = (int)(100ULL * pin_hits_ / total);  // fully pinned (hot) share
-    std::cout << "[Guanaco HerdCache] pin cache: " << pct << "% resident ("
+    std::cerr << "[Guanaco HerdCache] pin cache: " << pct << "% resident ("
               << ppct << "% hot-pinned), " << resident << "/" << total
               << " expert accesses, pinned=" << pinned_total_
               << " across " << expert_tensors_.size() << " tensors\n";
@@ -910,7 +907,7 @@ void SteppeLoader::log_final_summary() {
     const size_t n_tensors = expert_tensors_.size();
     const int per_tensor = n_tensors ? (int)(pinned_current_ / n_tensors) : 0;
 
-    std::cout << "[Guanaco HerdCache] final: pin budget="
+    std::cerr << "[Guanaco HerdCache] final: pin budget="
               << config_.max_active_experts
               << " per tensor, experts pinned=" << pinned_current_
               << " (" << per_tensor << " avg / tensor across " << n_tensors
@@ -997,7 +994,7 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
             {
                 if (pread_full(src, dst, t.per_expert_bytes)) {
                     t.loaded[id] = true;
-                    drop_slice_page_cache(dst, t.per_expert_bytes);
+                    drop_slice_page_cache(src, t.per_expert_bytes);
                 }
             }
         }
@@ -1007,10 +1004,11 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
     if (uring_slab_ && !slices.empty()) {
         if (io_uring_slab_read(uring_slab_, fd_, slices)) {
             for (auto& p : slice_owners) {
+                ExpertTensor& t = *p.first;
+                int id = p.second;
+                const off_t src = static_cast<off_t>(t.file_offset) + static_cast<off_t>(id) * t.per_expert_bytes;
                 p.first->loaded[p.second] = true;
-                drop_slice_page_cache(
-                    static_cast<char*>(p.first->slab) + static_cast<size_t>(p.second) * p.first->per_expert_bytes,
-                    p.first->per_expert_bytes);
+                drop_slice_page_cache(src, t.per_expert_bytes);
             }
         } else {
             // Fallback: read each slice synchronously.
@@ -1021,7 +1019,7 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
                 void* dst = static_cast<char*>(t.slab) + static_cast<size_t>(id) * t.per_expert_bytes;
                 if (pread_full(src, dst, t.per_expert_bytes)) {
                     t.loaded[id] = true;
-                    drop_slice_page_cache(dst, t.per_expert_bytes);
+                    drop_slice_page_cache(src, t.per_expert_bytes);
                 }
             }
         }

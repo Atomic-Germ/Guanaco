@@ -50,7 +50,7 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
         const char* imatrix_env = std::getenv("GUANACO_IMATRIX");
         sl_config.use_imatrix = (imatrix_env == nullptr) ? true : (std::atoi(imatrix_env) != 0);
         loader = std::make_unique<SteppeLoader>(sl_config);
-        std::cout << "[Guanaco HerdCache] pin budget (max_active_experts) = "
+        std::cerr << "[Guanaco HerdCache] pin budget (max_active_experts) = "
                   << resolved << " experts per tensor"
                   << (env_val ? " [from GUANACO_MAX_EXPERTS]" : "") << "\n";
     }
