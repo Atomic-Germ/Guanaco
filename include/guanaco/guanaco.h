@@ -59,6 +59,11 @@ struct GUANACO_API ExpertTensor {
     std::vector<uint64_t> total_hits;      // cumulative router hits per expert
     std::vector<float>   window_hits;     // decaying windowed hits (EWMA)
     std::vector<bool>    pinned;          // hot experts kept resident
+    // Per-(from->to) routing transition counts, learned live. Drives the
+    // cross-layer PILOT prefetch: given the experts selected at this layer,
+    // the most likely experts at the next layer are read ahead while the
+    // current MoE block computes. Row-major over num_experts^2.
+    std::vector<uint64_t> trans;          // num_experts * num_experts
 };
 
 struct GUANACO_API SteppeLoaderConfig {
@@ -66,6 +71,9 @@ struct GUANACO_API SteppeLoaderConfig {
     int max_active_experts = 2;
     bool use_io_uring = true;
     bool use_madvise = true;
+    bool use_pilot = true;     // cross-layer lookahead prefetch (default on)
+    bool use_imatrix = true;   // seed hot pins from "<model>.imatrix.gguf" prior
+    bool dontneed = true;      // madvise(DONTNEED) slab slices after copy (drop page-cache)
     size_t io_queue_depth = 256;
 };
 
@@ -123,6 +131,13 @@ public:
     // slabs at the correct fused-layout offsets.
     void prefetch_experts(int layer, const int* expert_ids, int n);
 
+    // Cross-layer PILOT prefetch: given the experts selected at `layer`,
+    // predict the most likely experts at `layer+1` from the learned
+    // per-layer transition matrix and stream them into their slabs ahead
+    // of the real router decision. Hint-only: a wrong prediction just
+    // wastes a disk read into a cold slab; it never evicts a hot expert.
+    void pilot_prefetch_next_layer(int layer, const int* expert_ids, int n);
+
     // Snapshot of the hottest experts per layer for diagnostics/logging.
     struct HotExpertStats {
         int      layer       = -1;
@@ -162,8 +177,11 @@ private:
         std::unordered_map<std::string, std::array<int64_t, 4>>& out_dims,
         std::unordered_map<std::string, uint32_t>& out_n_dims);
     std::future<void> read_expert_async(const ExpertManifestEntry& entry,
-                                        std::shared_ptr<ExpertTensorBuffer> target_buf);
+                                         std::shared_ptr<ExpertTensorBuffer> target_buf);
     bool pread_full(off_t offset, void* dst, size_t len);
+    // Drop the kernel page-cache copy of a slab slice after it is copied in,
+    // so the OS does not double-cache streamed expert weights.
+    void drop_slice_page_cache(void* dst, size_t len);
 
     // Hot-expert pinning state.
     static constexpr float   kHitDecay_   = 0.95f;   // EWMA decay per record_routing()
@@ -181,6 +199,10 @@ private:
     uint64_t                 warm_hits_  = 0;  // served by an already-loaded (non-pinned) slice
     uint64_t                 disk_miss_  = 0;  // required a disk read
     uint64_t                 prefetch_calls_ = 0;
+    uint64_t                 pilot_calls_ = 0;     // pilot prefetch invocations
+    uint64_t                 pilot_slice_reads_ = 0; // expert slices pulled by pilot
+    int                      pilot_from_layer_ = -1;  // layer whose ids are pending as "from"
+    std::vector<int>         pilot_from_ids_;        // selected ids of pilot_from_layer_
     void maybe_pin_hot_experts();
     void pin_from_seeded_totals();   // initial pin pass driven by imatrix prior
     void log_hot_summary();

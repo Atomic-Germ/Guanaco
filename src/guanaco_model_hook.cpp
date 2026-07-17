@@ -39,6 +39,16 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
         sl_config.max_active_experts = resolved;
         sl_config.use_madvise   = true;
         sl_config.use_io_uring  = true;
+
+        // Cross-layer PILOT lookahead prefetch: default ON (GUANACO_PILOT).
+        // It only hints future reads and never evicts hot experts, so a
+        // mispredict costs at most a wasted disk read, not correctness.
+        const char* pilot_env = std::getenv("GUANACO_PILOT");
+        sl_config.use_pilot = (pilot_env == nullptr) ? true : (std::atoi(pilot_env) != 0);
+
+        // imatrix cold-start prior: default ON (GUANACO_IMATRIX).
+        const char* imatrix_env = std::getenv("GUANACO_IMATRIX");
+        sl_config.use_imatrix = (imatrix_env == nullptr) ? true : (std::atoi(imatrix_env) != 0);
         loader = std::make_unique<SteppeLoader>(sl_config);
         std::cout << "[Guanaco HerdCache] pin budget (max_active_experts) = "
                   << resolved << " experts per tensor"
@@ -75,6 +85,7 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
         if (!loader || expert_ids == nullptr || n <= 0) return;
         loader->record_routing(layer_idx, expert_ids, n);
         loader->prefetch_experts(layer_idx, expert_ids, n);
+        loader->pilot_prefetch_next_layer(layer_idx, expert_ids, n);
     }
 
     void advise_random_access(void* ml) override {

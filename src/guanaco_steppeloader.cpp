@@ -542,6 +542,7 @@ void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
     t.total_hits.assign(num_experts, 0);
     t.window_hits.assign(num_experts, 0.0f);
     t.pinned.assign(num_experts, false);
+    t.trans.assign((size_t)num_experts * num_experts, 0);
 
     // Sparse anonymous mapping: only the pages we pread() into ever
     // become resident, so unselected experts cost no RAM.
@@ -576,8 +577,48 @@ bool SteppeLoader::pread_full(off_t offset, void* dst, size_t len) {
     return true;
 }
 
+// After a slice is copied into its slab, drop the kernel page-cache copy so
+// the OS does not double-cache the weights (avoids the mmap-RSS blowup that
+// otherwise grows peak RAM to the whole model). Mirrors colibri's
+// posix_fadvise(DONTNEED) on every streamed expert.
+void SteppeLoader::drop_slice_page_cache(void* dst, size_t len) {
+    if (!config_.dontneed || len == 0) return;
+    apply_madvise_dontneed(dst, len);
+}
+
+bool apply_madvise_dontneed(void* addr, size_t length) {
+    if (addr == nullptr || length == 0) return false;
+    // Align down to page so we never partially drop a neighbor's pages.
+    const long page = sysconf(_SC_PAGESIZE);
+    const uintptr_t mask = ~((uintptr_t)page - 1);
+    void* base = (void*)((uintptr_t)addr & mask);
+    size_t len = length + ((uintptr_t)addr - (uintptr_t)base);
+    return madvise(base, len, MADV_DONTNEED) == 0;
+}
+
 void SteppeLoader::record_routing(int layer, const int* expert_ids, int n) {
     if (expert_ids == nullptr || n <= 0) return;
+
+    // Learn the per-layer (from->to) transition counts for PILOT. The layer
+    // that just fired (pilot_from_layer_) is the "from"; this layer's selected
+    // ids are the "to". Layers fire in order within a token, so the previously
+    // recorded layer is exactly layer-1.
+    if (pilot_from_layer_ == layer - 1 && !pilot_from_ids_.empty()) {
+        for (auto& kv : expert_tensors_) {
+            ExpertTensor& t = kv.second;
+            if (t.layer != layer || t.num_experts <= 0) continue;
+            const int E = t.num_experts;
+            for (int i = 0; i < n; ++i) {
+                int to = expert_ids[i];
+                if (to < 0 || to >= E) continue;
+                for (int j = 0; j < (int)pilot_from_ids_.size(); ++j) {
+                    int from = pilot_from_ids_[j];
+                    if (from < 0 || from >= E) continue;
+                    ++t.trans[(size_t)from * E + to];
+                }
+            }
+        }
+    }
 
     for (auto& kv : expert_tensors_) {
         ExpertTensor& t = kv.second;
@@ -590,6 +631,10 @@ void SteppeLoader::record_routing(int layer, const int* expert_ids, int n) {
             t.window_hits[id] = t.window_hits[id] * kHitDecay_ + 1.0f;
         }
     }
+
+    // Remember this layer's ids so the next layer can learn from->to.
+    pilot_from_layer_ = layer;
+    pilot_from_ids_.assign(expert_ids, expert_ids + n);
 
     ++routing_records_;
 
@@ -604,6 +649,56 @@ void SteppeLoader::record_routing(int layer, const int* expert_ids, int n) {
     if (prefetch_calls_ > 0 && prefetch_calls_ % kPinRateEvery_ == 0) {
         log_pin_rate();
     }
+}
+
+void SteppeLoader::pilot_prefetch_next_layer(int layer, const int* expert_ids, int n) {
+    if (!config_.use_pilot || expert_ids == nullptr || n <= 0) return;
+    const int next = layer + 1;
+    if (next >= (int)model_config_.num_hidden_layers) return;
+
+    // For each expert selected at this layer, gather the top predicted
+    // experts at the next layer from the learned transition matrix, then
+    // prefetch them. Hint-only: prefetch_experts() itself skips anything
+    // already pinned/loaded, so a wrong guess costs at most a wasted read
+    // into a cold slab.
+    std::unordered_set<int> predicted;
+    for (auto& kv : expert_tensors_) {
+        ExpertTensor& t = kv.second;
+        if (t.layer != next || t.num_experts <= 0) continue;
+        const int E = t.num_experts;
+
+        // Accumulate predicted-next scores: sum of transition counts over all
+        // selected "from" experts at this layer.
+        std::vector<uint64_t> score(E, 0);
+        bool any = false;
+        for (int i = 0; i < n; ++i) {
+            int from = expert_ids[i];
+            if (from < 0 || from >= E) continue;
+            const uint64_t* row = &t.trans[(size_t)from * E];
+            for (int to = 0; to < E; ++to) {
+                if (row[to]) { score[to] += row[to]; any = true; }
+            }
+        }
+        if (!any) continue;  // not enough history yet; skip
+
+        // Keep the top-K most-likely next experts (bounded by pin budget).
+        const int K = config_.max_active_experts;
+        std::vector<int> order(E);
+        for (int i = 0; i < E; ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](int a, int b) {
+            return score[a] > score[b];
+        });
+        for (int r = 0; r < K && r < E; ++r) {
+            predicted.insert(order[r]);
+        }
+    }
+    if (predicted.empty()) return;
+
+    ++pilot_calls_;
+    pilot_slice_reads_ += predicted.size();
+    std::vector<int> ids(predicted.begin(), predicted.end());
+    // Reuse the same prefetch path; it classifies hits/misses and copies.
+    prefetch_experts(next, ids.data(), (int)ids.size());
 }
 
 void SteppeLoader::maybe_pin_hot_experts() {
@@ -641,6 +736,7 @@ void SteppeLoader::maybe_pin_hot_experts() {
                     if (!pread_full(src, dst, t.per_expert_bytes)) continue;
                 }
                 t.loaded[id] = true;
+                drop_slice_page_cache(dst, t.per_expert_bytes);
             }
             t.pinned[id] = true;
             ++pinned_total_;
@@ -656,6 +752,13 @@ void SteppeLoader::maybe_pin_hot_experts() {
 
 size_t SteppeLoader::load_imatrix_prior(const std::string& model_path) {
     if (imatrix_seeded_ || expert_tensors_.empty()) {
+        return 0;
+    }
+    imatrix_seeded_ = true;  // don't retry
+
+    if (!config_.use_imatrix) {
+        std::cout << "[Guanaco HerdCache] imatrix prior disabled (GUANACO_IMATRIX=0); "
+                  << "cold-start pinning will use runtime stats.\n";
         return 0;
     }
 
@@ -706,8 +809,6 @@ size_t SteppeLoader::load_imatrix_prior(const std::string& model_path) {
               << " (" << total_observations << " expert selections across "
               << seeded << " expert slots)\n";
 
-    imatrix_seeded_ = true;
-
     // Immediately pin the calibration-hot experts so they are resident from
     // token 0, before any runtime routing statistics exist.
     if (seeded > 0) {
@@ -751,6 +852,7 @@ void SteppeLoader::pin_from_seeded_totals() {
                     if (!pread_full(src, dst, t.per_expert_bytes)) continue;
                 }
                 t.loaded[id] = true;
+                drop_slice_page_cache(dst, t.per_expert_bytes);
             }
             t.pinned[id] = true;
             ++pinned_total_;
@@ -817,6 +919,9 @@ void SteppeLoader::log_final_summary() {
               << "% hot-pinned)"
               << ", " << total << " expert accesses over "
               << prefetch_calls_ << " prefetch calls"
+              << (config_.use_pilot
+                  ? (", pilot: " + std::to_string(pilot_calls_) + " calls / " + std::to_string(pilot_slice_reads_) + " slices")
+                  : "")
               << (imatrix_seeded_ ? ", imatrix prior used" : "")
               << "\n";
 }
@@ -892,6 +997,7 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
             {
                 if (pread_full(src, dst, t.per_expert_bytes)) {
                     t.loaded[id] = true;
+                    drop_slice_page_cache(dst, t.per_expert_bytes);
                 }
             }
         }
@@ -902,6 +1008,9 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
         if (io_uring_slab_read(uring_slab_, fd_, slices)) {
             for (auto& p : slice_owners) {
                 p.first->loaded[p.second] = true;
+                drop_slice_page_cache(
+                    static_cast<char*>(p.first->slab) + static_cast<size_t>(p.second) * p.first->per_expert_bytes,
+                    p.first->per_expert_bytes);
             }
         } else {
             // Fallback: read each slice synchronously.
@@ -912,6 +1021,7 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
                 void* dst = static_cast<char*>(t.slab) + static_cast<size_t>(id) * t.per_expert_bytes;
                 if (pread_full(src, dst, t.per_expert_bytes)) {
                     t.loaded[id] = true;
+                    drop_slice_page_cache(dst, t.per_expert_bytes);
                 }
             }
         }
