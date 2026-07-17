@@ -596,11 +596,16 @@ void SteppeLoader::drop_slice_page_cache(off_t src_offset, size_t len) {
 void SteppeLoader::record_routing(int layer, const int* expert_ids, int n) {
     if (expert_ids == nullptr || n <= 0) return;
 
-    // Learn the per-layer (from->to) transition counts for PILOT. The layer
-    // that just fired (pilot_from_layer_) is the "from"; this layer's selected
-    // ids are the "to". Layers fire in order within a token, so the previously
-    // recorded layer is exactly layer-1.
-    if (pilot_from_layer_ == layer - 1 && !pilot_from_ids_.empty()) {
+    // Learn the per-layer (from->to) transition counts for PILOT. The
+    // previously-fired MoE layer (pilot_from_layer_) is the "from"; this
+    // layer's selected ids are the "to". Layers fire in strictly increasing
+    // order within a token, so a strictly-increasing layer means we are still
+    // in the same token and can learn the transition. A non-increasing layer
+    // means a new token started, so we reset without learning the bogus
+    // wrap-around transition. This also works for sparse-MoE models where
+    // not every layer has routed experts: the gap between consecutive fired
+    // layers is absorbed rather than breaking the adjacency check.
+    if (pilot_from_layer_ >= 0 && layer > pilot_from_layer_ && !pilot_from_ids_.empty()) {
         for (auto& kv : expert_tensors_) {
             ExpertTensor& t = kv.second;
             if (t.layer != layer || t.num_experts <= 0) continue;
