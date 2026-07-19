@@ -9,6 +9,9 @@
 #include <unordered_map>
 #include <functional>
 
+struct ggml_backend_buffer;
+typedef struct ggml_backend_buffer* ggml_backend_buffer_t;
+
 #ifdef _WIN32
     #ifdef GUANACO_EXPORTS
         #define GUANACO_API __declspec(dllexport)
@@ -54,11 +57,17 @@ struct GUANACO_API ExpertTensor {
     size_t      byte_size       = 0;   // total fused tensor size in bytes
     int         num_experts     = 1;   // expert dimension of the fused tensor
     size_t      per_expert_bytes = 0;   // byte_size / num_experts
-    void *      slab            = nullptr;
+    // The original mmap base of the fused tensor, captured at registration.
+    // ggml reads the expert weights from this address; we never redirect it.
+    // Disk streaming is done in-place by (de)pressing these mmap pages with
+    // madvise(MADV_DONTNEED / MADV_WILLNEED) so residency is controlled at
+    // the SAME address ggml consumes.
+    void *      mmap_base       = nullptr;
     std::vector<bool> loaded;              // per-expert residency bits
     std::vector<uint64_t> total_hits;      // cumulative router hits per expert
     std::vector<float>   window_hits;     // decaying windowed hits (EWMA)
     std::vector<bool>    pinned;          // hot experts kept resident
+    std::vector<uint64_t> last_used;       // LRU recency clock per expert slice
     // Per-(from->to) routing transition counts, learned live. Drives the
     // cross-layer PILOT prefetch: given the experts selected at this layer,
     // the most likely experts at the next layer are read ahead while the
@@ -97,14 +106,16 @@ public:
     // perform sequential read-ahead when experts are accessed randomly.
     void advise_experts_random();
 
-    // Register a fused expert tensor for slab redirection. Allocates a
-    // sparse anonymous-mmap slab mirroring the fused layout; only selected
-    // expert slices are ever paged in (via prefetch_experts).
+    // Register a fused expert tensor for in-place mmap paging. Records the
+    // tensor's mmap base address (which ggml reads from directly) and the
+    // per-expert slice geometry; residency is then controlled via madvise
+    // without ever redirecting t->data.
     void register_expert_tensor(const std::string& name, int layer,
-                              size_t file_offset, size_t byte_size, int num_experts);
+                              size_t file_offset, size_t byte_size, int num_experts,
+                              void* mmap_base = nullptr);
 
-    // Pointer to the slab allocated for a registered expert tensor.
-    void* get_expert_tensor_data(const std::string& name);
+    // Pointer to the mmap base recorded for a registered expert tensor.
+    void*  get_expert_tensor_data(const std::string& name);
 
     // Look up a tensor's parsed GGUF manifest entry (for file offsets).
     const ExpertManifestEntry* lookup_expert(const std::string& name) const;
@@ -166,6 +177,11 @@ private:
     std::unordered_map<int, std::vector<ExpertManifestEntry>> layer_experts_;
     MoEModelConfig model_config_;
     std::unordered_map<std::string, ExpertTensor> expert_tensors_;
+    // When false the model has no MoE experts (dense model, or the expert
+    // count could not be determined): streaming is disabled and every method
+    // below becomes a no-op, so ggml uses its normal mmap and the model just
+    // runs. This prevents mis-parsing a dense FFN tensor as a 1-"expert" block.
+    bool enabled_ = true;
 
 #ifdef GUANACO_HAVE_IO_URING
     void* uring_slab_ = nullptr;  // batched io_uring reader for slab prefetch
@@ -178,11 +194,6 @@ private:
         std::unordered_map<std::string, uint32_t>& out_n_dims);
     std::future<void> read_expert_async(const ExpertManifestEntry& entry,
                                          std::shared_ptr<ExpertTensorBuffer> target_buf);
-    bool pread_full(off_t offset, void* dst, size_t len);
-    // Drop the kernel page-cache copy of a streamed slice's source bytes
-    // (on the GGUF fd) after it is copied into the slab. This releases the
-    // shared file cache without touching the anonymous slab itself.
-    void drop_slice_page_cache(off_t src_offset, size_t len);
 
     // Hot-expert pinning state.
     static constexpr float   kHitDecay_   = 0.95f;   // EWMA decay per record_routing()
@@ -202,9 +213,17 @@ private:
     uint64_t                 prefetch_calls_ = 0;
     uint64_t                 pilot_calls_ = 0;     // pilot prefetch invocations
     uint64_t                 pilot_slice_reads_ = 0; // expert slices pulled by pilot
+    uint64_t                 evictions_ = 0;       // LRU slab slices reclaimed
     int                      pilot_from_layer_ = -1;  // layer whose ids are pending as "from"
     std::vector<int>         pilot_from_ids_;        // selected ids of pilot_from_layer_
+    uint64_t                 eclock_ = 0;            // monotonic LRU recency counter
     void maybe_pin_hot_experts();
+    // LRU eviction: keep at most max_active_experts resident (pinned +
+    // warm) slices per tensor. Non-pinned slices are evicted least-
+    // recently-used first; their slab pages are dropped (safe because a
+    // cleared loaded[] flag forces a re-read before ggml uses the slice).
+    void evict_to_budget(ExpertTensor& t);
+    void touch(ExpertTensor& t, int id);
     void pin_from_seeded_totals();   // initial pin pass driven by imatrix prior
     void log_hot_summary();
     void log_pin_rate();

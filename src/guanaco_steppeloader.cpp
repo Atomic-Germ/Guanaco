@@ -1,5 +1,6 @@
 #include "guanaco/guanaco.h"
 #include "gguf.h"
+#include "ggml-backend.h"
 #include <cstring>
 #include <algorithm>
 #include <iostream>
@@ -42,11 +43,13 @@ bool SteppeLoader::initialize() {
         return false;
     }
 
+    // Parse metadata first so we know the authoritative MoE expert count and
+    // can disable streaming for dense models before scanning the manifest.
+    parse_gguf_metadata();
+
     if (!parse_gguf_manifest()) {
         return false;
     }
-    
-    parse_gguf_metadata();
 
     return true;
 }
@@ -62,10 +65,8 @@ void SteppeLoader::shutdown() {
 #endif
 
     for (auto& kv : expert_tensors_) {
-        if (kv.second.slab != nullptr) {
-            munmap(kv.second.slab, kv.second.byte_size);
-            kv.second.slab = nullptr;
-        }
+        // Residency of the mmap pages is owned by the OS; nothing to free here.
+        kv.second.mmap_base = nullptr;
     }
     expert_tensors_.clear();
 
@@ -90,8 +91,18 @@ bool SteppeLoader::parse_gguf_manifest() {
 
     int64_t n_tensors = gguf_get_n_tensors(ctx);
     size_t data_offset = gguf_get_data_offset(ctx);
-    
+
+    // Dense model: nothing to stream. Skip the whole scan (and avoid emitting
+    // the misleading "Parsed N expert tensors" line for a non-MoE model).
+    if (!enabled_) {
+        std::cerr << "[Guanaco Storage] Skipping expert manifest (streaming disabled)\n";
+        gguf_free(ctx);
+        return true;
+    }
+
     manifest_.reserve(n_tensors);
+
+    const int model_experts = model_config_.num_experts;
 
     for (int64_t i = 0; i < n_tensors; ++i) {
         const char* name = gguf_get_tensor_name(ctx, i);
@@ -115,10 +126,12 @@ bool SteppeLoader::parse_gguf_manifest() {
             dims = dim_it->second;
             n_dims = tensor_n_dims[name_str];
             
-            // For expert tensors, the expert count is usually in ne[2] or ne[3]
-            for (uint32_t d = 0; d < n_dims; ++d) {
-                if (dims[d] > 1 && (d == 2 || d == 3)) {
+            // Expert count is the trailing (highest-indexed) dim > 1,
+            // matching the detection in llama-model.cpp:load_tensors.
+            for (int d = 3; d >= 0; --d) {
+                if (dims[d] > 1) {
                     num_experts_in_tensor = static_cast<int>(dims[d]);
+                    break;
                 }
             }
         }
@@ -147,6 +160,17 @@ bool SteppeLoader::parse_gguf_manifest() {
             }
             
             tensor_type = (name_str.find("gate") != std::string::npos) ? 2 : 0;
+        }
+
+        // Only treat a tensor as a real MoE expert block if its trailing dim is
+        // a genuine expert count. A dense FFN tensor (e.g. ffn_up_exps.weight
+        // with trailing dim = hidden_size) has num_experts_in_tensor set to the
+        // hidden size; requiring it to match the model's MoE expert count
+        // avoids mis-parsing dense weights as one giant "expert" (which caused
+        // thrashing / OOM on DeepSeek-70B and Seed-OSS).
+        if (num_experts_in_tensor > 1 && model_experts > 1 &&
+            num_experts_in_tensor != model_experts) {
+            continue;
         }
 
         if (layer_idx >= 0 || expert_idx >= 0 || num_experts_in_tensor > 1) {
@@ -371,7 +395,16 @@ bool SteppeLoader::parse_gguf_metadata() {
               << ", top_k=" << model_config_.num_experts_per_tok
               << ", layers=" << model_config_.num_hidden_layers
               << ", hidden=" << model_config_.hidden_size << std::endl;
-    
+
+    // Dense model (or expert count unknown): there is nothing to stream.
+    // Disable streaming so we never mistake a dense FFN tensor for a 1-expert
+    // block and thrash / corrupt the run. ggml's normal mmap is used instead.
+    if (model_config_.num_experts <= 1) {
+        enabled_ = false;
+        std::cerr << "[Guanaco Storage] No MoE experts detected (experts="
+                  << model_config_.num_experts << ") - disabling Guanaco disk streaming (passthrough)\n";
+    }
+
     return true;
 }
 
@@ -471,45 +504,25 @@ std::future<void> SteppeLoader::read_expert_async(const ExpertManifestEntry& ent
 }
 
 void SteppeLoader::advise_experts_random() {
-    if (fd_ < 0 || manifest_.empty()) {
+    if (fd_ < 0 || expert_tensors_.empty()) {
         return;
     }
 
-    struct stat st;
-    if (fstat(fd_, &st) != 0) {
-        return;
-    }
-
-    void* addr = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd_, 0);
-    if (addr == MAP_FAILED) {
-        return;
-    }
-
-    const long page_size = sysconf(_SC_PAGESIZE);
-    const uintptr_t page_mask = ~((uintptr_t)page_size - 1);
-
+    // Tell the kernel not to do sequential read-ahead on the expert mmap
+    // regions (MADV_RANDOM), and not to cache them sequentially from the fd
+    // (POSIX_FADV_RANDOM). This keeps the OS from aggressively faulting in
+    // adjacent experts we will not use, which is the whole point of routing.
     size_t advised = 0;
-    for (const auto& entry : manifest_) {
-        // Only expert tensors (fused blocks or individual experts)
-        if (entry.expert_idx < 0 && entry.num_experts_in_tensor <= 1) {
-            continue;
-        }
-        if (entry.byte_size == 0) {
-            continue;
-        }
-
-        uintptr_t region_start = (uintptr_t)addr + entry.file_offset;
-        uintptr_t aligned_start = region_start & page_mask;
-        size_t size = entry.byte_size + (region_start - aligned_start);
-
-        if (madvise((void*)aligned_start, size, MADV_RANDOM) == 0) {
+    for (auto& kv : expert_tensors_) {
+        ExpertTensor& t = kv.second;
+        if (t.mmap_base == nullptr || t.byte_size == 0) continue;
+        madvise(t.mmap_base, t.byte_size, MADV_RANDOM);
+        if (posix_fadvise(fd_, (off_t)t.file_offset, (off_t)t.byte_size, POSIX_FADV_RANDOM) == 0) {
             ++advised;
         }
     }
 
-    munmap(addr, st.st_size);
-
-    std::cerr << "[Guanaco Storage] Applied MADV_RANDOM to " << advised
+    std::cerr << "[Guanaco Storage] Applied MADV_RANDOM / POSIX_FADV_RANDOM to " << advised
               << " expert regions" << std::endl;
 }
 
@@ -523,12 +536,13 @@ const ExpertManifestEntry* SteppeLoader::lookup_expert(const std::string& name) 
 }
 
 void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
-                                            size_t file_offset, size_t byte_size, int num_experts) {
-    if (fd_ < 0 || byte_size == 0 || num_experts <= 0) {
+                                            size_t file_offset, size_t byte_size, int num_experts,
+                                            void* mmap_base) {
+    if (!enabled_ || fd_ < 0 || byte_size == 0 || num_experts <= 1) {
         return;
     }
     // Defense in depth: the per-expert slice must divide evenly, otherwise
-    // the pread offsets would be misaligned and corrupt adjacent experts.
+    // the slice offsets would be misaligned and corrupt adjacent experts.
     // Callers (llama-model.cpp) pre-check this, but skip if it doesn't hold.
     if (byte_size % static_cast<size_t>(num_experts) != 0) {
         return;
@@ -544,57 +558,26 @@ void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
     t.byte_size       = byte_size;
     t.num_experts    = num_experts;
     t.per_expert_bytes = byte_size / static_cast<size_t>(num_experts);
-    t.loaded.assign(num_experts, false);
+    t.mmap_base      = mmap_base;
+    t.loaded.assign(num_experts, true);   // mapped resident at load time
     t.total_hits.assign(num_experts, 0);
     t.window_hits.assign(num_experts, 0.0f);
     t.pinned.assign(num_experts, false);
+    t.last_used.assign(num_experts, 0);
     t.trans.assign((size_t)num_experts * num_experts, 0);
 
-    // Sparse anonymous mapping: only the pages we pread() into ever
-    // become resident, so unselected experts cost no RAM.
-    void* slab = mmap(nullptr, byte_size, PROT_READ | PROT_WRITE,
-                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (slab == MAP_FAILED) {
-        std::cerr << "[Guanaco Storage] Failed to allocate slab for " << name << std::endl;
-        return;
-    }
-    t.slab = slab;
-
     expert_tensors_.emplace(name, std::move(t));
-    std::cerr << "[Guanaco HerdCache] Slab ready for " << name
+    std::cerr << "[Guanaco HerdCache] Tracking " << name
               << " (" << num_experts << " experts, " << (byte_size / (1024*1024)) << " MB fused)\n";
 }
 
-void* SteppeLoader::get_expert_tensor_data(const std::string& name) {
-    auto it = expert_tensors_.find(name);
-    return it != expert_tensors_.end() ? it->second.slab : nullptr;
-}
+ void* SteppeLoader::get_expert_tensor_data(const std::string& name) {
+     auto it = expert_tensors_.find(name);
+     return it != expert_tensors_.end() ? it->second.mmap_base : nullptr;
+ }
 
-bool SteppeLoader::pread_full(off_t offset, void* dst, size_t len) {
-    size_t total = 0;
-    while (total < len) {
-        ssize_t n = pread(fd_, static_cast<char*>(dst) + total, len - total, offset + total);
-        if (n <= 0) {
-            if (errno == EINTR) continue;
-            return false;
-        }
-        total += static_cast<size_t>(n);
-    }
-    return true;
-}
-
-// After a slice is copied into its slab via pread, advise the kernel to drop
-// its copy of the source pages from the file page cache. This is the safe
-// analog of colibri's posix_fadvise(DONTNEED): it releases the shared file
-// cache, NOT the anonymous slab (MADV_DONTNEED on an anonymous mapping would
-// zero our just-loaded weights and corrupt inference).
-void SteppeLoader::drop_slice_page_cache(off_t src_offset, size_t len) {
-    if (!config_.dontneed || len == 0 || fd_ < 0) return;
-    posix_fadvise(fd_, src_offset, (off_t)len, POSIX_FADV_DONTNEED);
-}
-
-void SteppeLoader::record_routing(int layer, const int* expert_ids, int n) {
-    if (expert_ids == nullptr || n <= 0) return;
+ void SteppeLoader::record_routing(int layer, const int* expert_ids, int n) {
+    if (!enabled_ || expert_ids == nullptr || n <= 0) return;
 
     // Learn the per-layer (from->to) transition counts for PILOT. The
     // previously-fired MoE layer (pilot_from_layer_) is the "from"; this
@@ -653,8 +636,8 @@ void SteppeLoader::record_routing(int layer, const int* expert_ids, int n) {
     }
 }
 
-void SteppeLoader::pilot_prefetch_next_layer(int layer, const int* expert_ids, int n) {
-    if (!config_.use_pilot || expert_ids == nullptr || n <= 0) return;
+ void SteppeLoader::pilot_prefetch_next_layer(int layer, const int* expert_ids, int n) {
+    if (!enabled_ || !config_.use_pilot || expert_ids == nullptr || n <= 0) return;
     const int next = layer + 1;
     if (next >= (int)model_config_.num_hidden_layers) return;
 
@@ -703,10 +686,51 @@ void SteppeLoader::pilot_prefetch_next_layer(int layer, const int* expert_ids, i
     prefetch_experts(next, ids.data(), (int)ids.size());
 }
 
+void SteppeLoader::touch(ExpertTensor& t, int id) {
+    if (id >= 0 && id < t.num_experts) {
+        t.last_used[id] = ++eclock_;
+    }
+}
+
+void SteppeLoader::evict_to_budget(ExpertTensor& t) {
+    const int budget = config_.max_active_experts;
+    if (budget <= 0 || t.mmap_base == nullptr) return;
+
+    // Resident = pinned OR loaded (warm). Pinned are exempt from eviction.
+    int resident = 0;
+    for (int i = 0; i < t.num_experts; ++i) {
+        if (t.pinned[i] || t.loaded[i]) ++resident;
+    }
+    if (resident <= budget) return;
+
+    // Evict least-recently-used non-pinned loaded slices until within budget.
+    // Eviction drops the mmap pages (MADV_DONTNEED): the OS frees the RAM and
+    // a later access by mul_mat_id transparently page-faults the slice back
+    // from the GGUF file. The bytes are identical (same file-backed address),
+    // so there is no correctness risk - only a disk read on next use.
+    int to_evict = resident - budget;
+    while (to_evict > 0) {
+        int victim = -1;
+        uint64_t oldest = UINT64_MAX;
+        for (int i = 0; i < t.num_experts; ++i) {
+            if (t.pinned[i] || !t.loaded[i]) continue;
+            if (t.last_used[i] < oldest) { oldest = t.last_used[i]; victim = i; }
+        }
+        if (victim < 0) break;  // nothing left to evict (all pinned)
+
+        ++evictions_;
+        // Gate: loaded[victim]=false means the next select re-faults it.
+        t.loaded[victim] = false;
+        void* addr = static_cast<char*>(t.mmap_base) + (size_t)victim * t.per_expert_bytes;
+        madvise(addr, t.per_expert_bytes, MADV_DONTNEED);
+        --to_evict;
+    }
+}
+
 void SteppeLoader::maybe_pin_hot_experts() {
     for (auto& kv : expert_tensors_) {
         ExpertTensor& t = kv.second;
-        if (t.num_experts <= 0) continue;
+        if (t.num_experts <= 0 || t.mmap_base == nullptr) continue;
 
         // Rank expert windowed hotness for this tensor.
         std::vector<int> order(t.num_experts);
@@ -716,38 +740,33 @@ void SteppeLoader::maybe_pin_hot_experts() {
         });
 
         // Pin the top-K experts (bounded by config), skipping those already
-        // pinned. A pinned expert is read once (below) and never evicted.
+        // pinned. A pinned expert is faulted in (MADV_WILLNEED) and never
+        // evicted, so its slice stays resident for the whole run.
         const int topk = config_.max_active_experts;
         for (int rank = 0; rank < topk && rank < t.num_experts; ++rank) {
             int id = order[rank];
             if (t.pinned[id]) continue;
             if (t.window_hits[id] <= 0.0f) break;  // no usage yet
 
-            if (t.slab && !t.loaded[id]) {
-                const off_t src = static_cast<off_t>(t.file_offset) + static_cast<off_t>(id) * t.per_expert_bytes;
-                void* dst = static_cast<char*>(t.slab) + static_cast<size_t>(id) * t.per_expert_bytes;
-#ifdef GUANACO_HAVE_IO_URING
-                if (uring_slab_) {
-                    std::vector<IoUringSlice> one = { { dst, t.per_expert_bytes, static_cast<int64_t>(src) } };
-                    if (!io_uring_slab_read(uring_slab_, fd_, one)) {
-                        if (!pread_full(src, dst, t.per_expert_bytes)) continue;
-                    }
-                } else
-#endif
-                {
-                    if (!pread_full(src, dst, t.per_expert_bytes)) continue;
-                }
+            if (!t.loaded[id]) {
+                // Ensure the slice is resident (it may have been evicted).
+                void* addr = static_cast<char*>(t.mmap_base) + (size_t)id * t.per_expert_bytes;
+                madvise(addr, t.per_expert_bytes, MADV_WILLNEED);
                 t.loaded[id] = true;
-                drop_slice_page_cache(src, t.per_expert_bytes);
             }
             t.pinned[id] = true;
             ++pinned_total_;
             ++pinned_current_;
         }
+
+        // After refreshing this tensor's hot pins, drop its cold (non-pinned)
+        // slices down to the resident budget. Pinned experts are exempt, and
+        // the slices we just WILLNEED'd are recent so they survive the LRU cut.
+        evict_to_budget(t);
     }
 
     if (routing_records_ >= kWarmupLayers_ && routing_records_ % kLogEveryLayers_ == 0) {
-        std::cerr << "[Guanaco HerdCache] Hot experts pinned: " << pinned_total_
+        std::cerr << "[Guanaco HerdCache] distinct experts pinned: " << pinned_total_
                   << " total across " << expert_tensors_.size() << " tensors\n";
     }
 }
@@ -839,22 +858,10 @@ void SteppeLoader::pin_from_seeded_totals() {
             if (t.pinned[id]) continue;
             if (t.total_hits[id] <= 0) break;  // no calibration usage
 
-            if (t.slab && !t.loaded[id]) {
-                const off_t src = static_cast<off_t>(t.file_offset) + static_cast<off_t>(id) * t.per_expert_bytes;
-                void* dst = static_cast<char*>(t.slab) + static_cast<size_t>(id) * t.per_expert_bytes;
-#ifdef GUANACO_HAVE_IO_URING
-                if (uring_slab_) {
-                    std::vector<IoUringSlice> one = { { dst, t.per_expert_bytes, static_cast<int64_t>(src) } };
-                    if (!io_uring_slab_read(uring_slab_, fd_, one)) {
-                        if (!pread_full(src, dst, t.per_expert_bytes)) continue;
-                    }
-                } else
-#endif
-                {
-                    if (!pread_full(src, dst, t.per_expert_bytes)) continue;
-                }
+            if (!t.loaded[id] && t.mmap_base != nullptr) {
+                void* addr = static_cast<char*>(t.mmap_base) + (size_t)id * t.per_expert_bytes;
+                madvise(addr, t.per_expert_bytes, MADV_WILLNEED);
                 t.loaded[id] = true;
-                drop_slice_page_cache(src, t.per_expert_bytes);
             }
             t.pinned[id] = true;
             ++pinned_total_;
@@ -895,7 +902,7 @@ void SteppeLoader::log_pin_rate() {
     const int ppct = (int)(100ULL * pin_hits_ / total);  // fully pinned (hot) share
     std::cerr << "[Guanaco HerdCache] pin cache: " << pct << "% resident ("
               << ppct << "% hot-pinned), " << resident << "/" << total
-              << " expert accesses, pinned=" << pinned_total_
+              << " expert accesses, distinct experts pinned=" << pinned_total_
               << " across " << expert_tensors_.size() << " tensors\n";
 }
 
@@ -910,11 +917,11 @@ void SteppeLoader::log_final_summary() {
     const int ppct = total ? (int)(100ULL * pin_hits_ / total) : 0;
 
     const size_t n_tensors = expert_tensors_.size();
-    const int per_tensor = n_tensors ? (int)(pinned_current_ / n_tensors) : 0;
+    const double per_tensor = n_tensors ? (double)pinned_current_ / n_tensors : 0.0;
 
     std::cerr << "[Guanaco HerdCache] final: pin budget="
               << config_.max_active_experts
-              << " per tensor, experts pinned=" << pinned_current_
+              << " per tensor, experts pinned now=" << pinned_current_
               << " (" << per_tensor << " avg / tensor across " << n_tensors
               << " tensors)"
               << ", pin cache=" << pct << "% resident (" << ppct
@@ -924,6 +931,7 @@ void SteppeLoader::log_final_summary() {
               << (config_.use_pilot
                   ? (", pilot: " + std::to_string(pilot_calls_) + " calls / " + std::to_string(pilot_slice_reads_) + " slices")
                   : "")
+              << ", evictions=" << evictions_
               << (imatrix_seeded_ ? ", imatrix prior used" : "")
               << "\n";
 }
@@ -948,32 +956,27 @@ std::vector<SteppeLoader::HotExpertStats> SteppeLoader::get_hot_expert_stats() c
 }
 
 void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
-    if (fd_ < 0 || expert_ids == nullptr || n <= 0) {
+    if (!enabled_ || expert_ids == nullptr || n <= 0) {
         return;
     }
 
     ++prefetch_calls_;
 
-#ifdef GUANACO_HAVE_IO_URING
-    std::vector<IoUringSlice> slices;
-    std::vector<std::pair<ExpertTensor*, int>> slice_owners;
-#endif
-
     for (auto& kv : expert_tensors_) {
         ExpertTensor& t = kv.second;
-        if (t.layer != layer || t.slab == nullptr || t.per_expert_bytes == 0) {
+        if (t.layer != layer || t.mmap_base == nullptr || t.per_expert_bytes == 0) {
             continue;
         }
 
-        // Classify each router-selected expert for the pin-cache metric,
-        // then deduplicate the ones that still need a disk read.
-        //  - pinned: hot expert, already resident, zero disk I/O
-        //  - loaded: warm slice from a previous read, still resident
-        //  - otherwise: requires a fresh disk read this call
+        // Classify each router-selected expert for the pin-cache metric.
+        //  - pinned: hot expert, always resident, zero page fault
+        //  - loaded: warm slice still resident (we have not DONTNEED'd it)
+        //  - otherwise: currently evicted; we WILLNEED it back from disk now
         std::unordered_set<int> want;
         for (int i = 0; i < n; ++i) {
             int id = expert_ids[i];
             if (id < 0 || id >= t.num_experts) continue;
+            touch(t, id);  // any selected expert is "used now" for LRU
             if (t.pinned[id]) {
                 ++pin_hits_;
             } else if (t.loaded[id]) {
@@ -987,49 +990,19 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
             continue;
         }
 
+        // Async-resident the selected slices in-place on the mmap. MADV_WILLNEED
+        // asks the kernel to page the slice in ahead of the mul_mat_id node;
+        // if it is ignored, the later access simply page-faults (correct bytes,
+        // slightly later). No copy, no redirect - ggml reads the same address.
         for (int id : want) {
-            const off_t src = static_cast<off_t>(t.file_offset) + static_cast<off_t>(id) * t.per_expert_bytes;
-            void*  dst = static_cast<char*>(t.slab) + static_cast<size_t>(id) * t.per_expert_bytes;
-#ifdef GUANACO_HAVE_IO_URING
-            if (uring_slab_) {
-                slices.push_back({ dst, t.per_expert_bytes, static_cast<int64_t>(src) });
-                slice_owners.push_back({ &t, id });
-            } else
-#endif
-            {
-                if (pread_full(src, dst, t.per_expert_bytes)) {
-                    t.loaded[id] = true;
-                    drop_slice_page_cache(src, t.per_expert_bytes);
-                }
-            }
+            void* addr = static_cast<char*>(t.mmap_base) + (size_t)id * t.per_expert_bytes;
+            madvise(addr, t.per_expert_bytes, MADV_WILLNEED);
+            t.loaded[id] = true;
         }
+        // Do NOT evict here - the slices we just made resident are needed by
+        // the mul_mat_id node that runs immediately after this callback returns.
+        // Periodic eviction is handled by maybe_pin_hot_experts()/evict_to_budget.
     }
-
-#ifdef GUANACO_HAVE_IO_URING
-    if (uring_slab_ && !slices.empty()) {
-        if (io_uring_slab_read(uring_slab_, fd_, slices)) {
-            for (auto& p : slice_owners) {
-                ExpertTensor& t = *p.first;
-                int id = p.second;
-                const off_t src = static_cast<off_t>(t.file_offset) + static_cast<off_t>(id) * t.per_expert_bytes;
-                p.first->loaded[p.second] = true;
-                drop_slice_page_cache(src, t.per_expert_bytes);
-            }
-        } else {
-            // Fallback: read each slice synchronously.
-            for (auto& p : slice_owners) {
-                ExpertTensor& t = *p.first;
-                int id = p.second;
-                const off_t src = static_cast<off_t>(t.file_offset) + static_cast<off_t>(id) * t.per_expert_bytes;
-                void* dst = static_cast<char*>(t.slab) + static_cast<size_t>(id) * t.per_expert_bytes;
-                if (pread_full(src, dst, t.per_expert_bytes)) {
-                    t.loaded[id] = true;
-                    drop_slice_page_cache(src, t.per_expert_bytes);
-                }
-            }
-        }
-    }
-#endif
 }
 
 } // namespace guanaco

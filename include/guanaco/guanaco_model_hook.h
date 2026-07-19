@@ -40,7 +40,8 @@ struct GUANACO_API GuanacoModelHook {
     // sparse slab mirroring the fused layout; only selected expert
     // slices are ever paged in.
     virtual void register_expert_tensor(const char* tensor_name, int layer_idx,
-                                   size_t file_offset, size_t byte_size, int num_experts) = 0;
+                                    size_t file_offset, size_t byte_size, int num_experts,
+                                    void* mmap_base = nullptr) = 0;
     
     // Pointer to the slab allocated for a registered expert tensor.
     virtual void* get_expert_tensor_data(const char* tensor_name) = 0;
@@ -54,6 +55,12 @@ struct GUANACO_API GuanacoModelHook {
     // (cold-start) hot-expert pin pass so pinned experts are resident before
     // the first token is processed.
     virtual void on_expert_tensors_registered() = 0;
+
+    // Streaming is done in-place on the file mmap: expert weights stay at
+    // their original t->data address and residency is controlled via madvise,
+    // so no tensor-data redirection is needed. This hook is now a no-op and
+    // exists only to keep the load sequence symmetric. Returns empty.
+    virtual std::vector<int> on_tensors_loaded() = 0;
     
     // Apply MADV_RANDOM to expert regions
     virtual void advise_random_access(void* ml) = 0;

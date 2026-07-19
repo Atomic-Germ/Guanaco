@@ -96,11 +96,13 @@ add_library(guanaco
     src/guanaco_executor.cpp
     src/guanaco_model_hook.cpp
     src/guanaco_io_uring.cpp
+    src/guanaco_backend_wrap.cpp
 )
 
 target_include_directories(guanaco PUBLIC
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/../llama.cpp
+    ${CMAKE_SOURCE_DIR}/../llama.cpp/ggml/src
 )
 
 # imatrix prior: compile a copy of llama.cpp's imatrix-loader.cpp directly
@@ -148,3 +150,15 @@ if(GUANACO_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# Prototype sidecar generator: repacks expert tensors into the CPU backend's
+# blocked layout and writes a sidecar next to the GGUF (see tools/).
+add_executable(guanaco-repack tools/guanaco-repack.cpp)
+target_include_directories(guanaco-repack PRIVATE
+    ${CMAKE_SOURCE_DIR}/../llama.cpp/ggml/include
+    ${CMAKE_SOURCE_DIR}/../llama.cpp/include
+)
+target_link_libraries(guanaco-repack PRIVATE ggml)
+set_target_properties(guanaco-repack PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)

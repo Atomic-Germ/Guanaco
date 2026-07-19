@@ -20,6 +20,10 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
     SteppeLoaderConfig sl_config;
     std::unique_ptr<SteppeLoader> loader;
     std::string model_path;
+    // Tensor names registered via register_expert_tensor().  on_tensors_loaded()
+    // pairs each name with the slab pointer so llama.cpp can redirect t->data
+    // AFTER CPU_REPACK completes (avoiding the repack reading empty slab data).
+    std::vector<std::string> registered_tensors_;
 
     GuanacoModelHookImpl(const char* path, size_t max_active_experts)
         : model_path(path ? path : "") {
@@ -38,7 +42,8 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
         }
         sl_config.max_active_experts = resolved;
         sl_config.use_madvise   = true;
-        sl_config.use_io_uring  = true;
+        const char* iou_env = std::getenv("GUANACO_IO_URING");
+        sl_config.use_io_uring  = (iou_env == nullptr) ? true : (std::atoi(iou_env) != 0);
 
         // Cross-layer PILOT lookahead prefetch: default ON (GUANACO_PILOT).
         // It only hints future reads and never evicts hot experts, so a
@@ -71,9 +76,11 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
     }
 
     void register_expert_tensor(const char* tensor_name, int layer_idx,
-                                 size_t file_offset, size_t byte_size, int num_experts) override {
+                                 size_t file_offset, size_t byte_size, int num_experts,
+                                 void* mmap_base = nullptr) override {
         if (!loader || !tensor_name) return;
-        loader->register_expert_tensor(tensor_name, layer_idx, file_offset, byte_size, num_experts);
+        loader->register_expert_tensor(tensor_name, layer_idx, file_offset, byte_size, num_experts, mmap_base);
+        registered_tensors_.emplace_back(tensor_name);
     }
 
     void* get_expert_tensor_data(const char* tensor_name) override {
@@ -99,8 +106,16 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
     // pinning from a sibling imatrix prior (if present), then pin the
     // calibration-hot experts so they are resident before token 0.
     void on_expert_tensors_registered() override {
-        if (!loader) return;
-        loader->load_imatrix_prior(model_path);
+        // Deferred to on_tensors_loaded() so CPU_REPACK completes first.
+    }
+
+    std::vector<int> on_tensors_loaded() override {
+        // In-place mmap paging: no tensor-data redirection. Still seed the
+        // hot-expert pin pass from a sibling imatrix prior here.
+        if (loader) {
+            loader->load_imatrix_prior(model_path);
+        }
+        return {};
     }
 };
 

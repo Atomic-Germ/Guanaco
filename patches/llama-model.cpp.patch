@@ -1,5 +1,5 @@
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index d87481381..ee5deef86 100644
+index 4c10e4126..bb9984d47 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1,5 +1,9 @@
@@ -12,7 +12,7 @@ index d87481381..ee5deef86 100644
  #include "llama-arch.h"
  #include "llama-ext.h"
  #include "llama-hparams.h"
-@@ -1631,6 +1635,70 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1644,6 +1648,71 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
          }
      }
  
@@ -68,6 +68,7 @@ index d87481381..ee5deef86 100644
 +                            __func__, name);
 +                    continue;
 +                }
++                static bool guanaco_dbg = true;
 +                hook->register_expert_tensor(name, e->layer_idx, e->file_offset, nb, num_experts);
 +                t->data   = hook->get_expert_tensor_data(name);
 +                t->buffer = nullptr;
@@ -83,7 +84,7 @@ index d87481381..ee5deef86 100644
      if (use_mmap_buffer) {
          for (auto & mapping : ml.mappings) {
              pimpl->mappings.emplace_back(std::move(mapping));
-@@ -2316,6 +2384,10 @@ llama_model_params llama_model_default_params() {
+@@ -2329,6 +2398,10 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -94,7 +95,7 @@ index d87481381..ee5deef86 100644
      };
  
      return result;
-@@ -2726,6 +2798,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
+@@ -2740,6 +2813,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
      TENSOR_SKIP           (llama_model_loader::TENSOR_SKIP),
      TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL) {}
  
