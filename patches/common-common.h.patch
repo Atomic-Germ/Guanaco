@@ -1,8 +1,8 @@
 diff --git a/common/common.h b/common/common.h
-index 7ed1a9827..0d2e7c65f 100644
+index bffc1767a..b2b5b8897 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -574,6 +574,11 @@ struct common_params {
+@@ -575,6 +575,11 @@ struct common_params {
      bool use_mmap          = true;  // enable mmap to use filesystem cache
      bool use_direct_io     = false; // read from disk without buffering
      bool use_mlock         = false; // use mlock to keep model in memory

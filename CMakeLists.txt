@@ -150,15 +150,3 @@ if(GUANACO_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
-
-# Prototype sidecar generator: repacks expert tensors into the CPU backend's
-# blocked layout and writes a sidecar next to the GGUF (see tools/).
-add_executable(guanaco-repack tools/guanaco-repack.cpp)
-target_include_directories(guanaco-repack PRIVATE
-    ${CMAKE_SOURCE_DIR}/../llama.cpp/ggml/include
-    ${CMAKE_SOURCE_DIR}/../llama.cpp/include
-)
-target_link_libraries(guanaco-repack PRIVATE ggml)
-set_target_properties(guanaco-repack PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)

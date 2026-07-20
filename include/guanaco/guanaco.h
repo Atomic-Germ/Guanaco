@@ -175,6 +175,7 @@ private:
     int fd_ = -1;
     std::vector<ExpertManifestEntry> manifest_;
     std::unordered_map<int, std::vector<ExpertManifestEntry>> layer_experts_;
+    std::vector<int>          moe_layers_;      // sorted unique MoE layer indices
     MoEModelConfig model_config_;
     std::unordered_map<std::string, ExpertTensor> expert_tensors_;
     // When false the model has no MoE experts (dense model, or the expert

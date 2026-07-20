@@ -9,6 +9,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <glob.h>
+#include <dirent.h>
 #include <utility>
 #include <string>
 
@@ -76,133 +78,232 @@ void SteppeLoader::shutdown() {
     }
 }
 
-bool SteppeLoader::parse_gguf_manifest() {
-    // First pass: parse tensor dimensions directly from file
-    std::unordered_map<std::string, std::array<int64_t, 4>> tensor_dims;
-    std::unordered_map<std::string, uint32_t> tensor_n_dims;
-    parse_tensor_dims_from_file(tensor_dims, tensor_n_dims);
-    
-    struct gguf_init_params params = { false, nullptr };
-    struct gguf_context* ctx = gguf_init_from_file(config_.gguf_path.c_str(), params);
-    if (!ctx) {
-        std::cerr << "[Guanaco Storage] Failed to parse GGUF header" << std::endl;
-        return false;
+// Build the list of GGUF shard paths to scan. A sharded model's
+// filename looks like "...-00001-of-00004.gguf"; we glob the sibling
+// shards (00001..00004) so expert tensors living in any shard are
+// discovered. Single-file models just return the one path.
+static std::vector<std::string> build_shard_paths(const std::string& path) {
+    std::vector<std::string> out;
+    out.push_back(path);
+
+    // Split into directory + basename; all shard-name matching is done on the
+    // basename (the directory is just prepended back when building full paths).
+    std::string dir = path.substr(0, path.find_last_of('/') + 1);
+    std::string base = path.substr(path.find_last_of('/') + 1);
+
+    // Match "...-<cur>-of-<total>.gguf" within the basename
+    const char* dash = nullptr;
+    const char* of = nullptr;
+    const char* dot = strstr(base.c_str(), ".gguf");
+    if (dot) {
+        // scan backwards for "-of-"
+        for (const char* p = dot; p > base.c_str(); --p) {
+            if (strncmp(p, "-of-", 4) == 0) { of = p; break; }
+        }
     }
+    if (of) {
+        // of points at the "-of-" separator. Walk back over the current shard
+        // NUMBER digits, then the dash immediately before them is the one that
+        // separates the model basename from the shard index (e.g. "...Q8_0-00001-of-...").
+        const char* p = of - 1;
+        while (p > base.c_str() && *p >= '0' && *p <= '9') --p;
+        if (*p == '-') dash = p;
+    }
+    if (!dash || !of) return out;  // not a sharded name
 
-    int64_t n_tensors = gguf_get_n_tensors(ctx);
-    size_t data_offset = gguf_get_data_offset(ctx);
+    // prefix is the basename up to and including the dash before the shard
+    // number (e.g. "NVIDIA-...-Q8_0-"); suffix is "-of-NNNN.gguf" onward.
+    const std::string prefix(base.c_str(), dash - base.c_str() + 1);
+    const std::string suffix(of);  // "-of-NNNN.gguf" onward (starts at the '-')
+    int total = atoi(of + 4);
+    if (total <= 1) return out;
 
+    DIR* d = opendir(dir.c_str());
+    if (d != nullptr) {
+        struct dirent* de = nullptr;
+        while ((de = readdir(d)) != nullptr) {
+            std::string nm(de->d_name);
+            // Skip "."/".." and any name too short to possibly match the
+            // suffix (avoids unsigned underflow in the compare below).
+            if (nm.size() < suffix.size()) continue;
+            // Compare against the full prefix (which includes the trailing
+            // dash); sibling names are "<prefix><shard>-of-<total>.gguf".
+            bool pm = (nm.compare(0, prefix.size(), prefix) == 0);
+            bool sm = (nm.compare(nm.size() - suffix.size(), suffix.size(), suffix) == 0);
+            std::string full = dir + nm;
+            if (pm && sm && full != path) out.push_back(std::move(full));
+        }
+        closedir(d);
+    }
+    (void)total;
+    return out;
+}
+
+// Read only a GGUF shard's metadata (header + KV + tensor-info table) into a
+// small heap buffer and build a gguf_context from it. This deliberately avoids
+// gguf_init_from_file, which mmaps the entire (potentially huge) tensor data
+// blob - we only need tensor names/offsets/dims, so we grow a read buffer until
+// it covers the whole metadata region (gguf_get_data_offset <= buffer size).
+// Returns a context the caller must gguf_free, or nullptr on failure.
+static struct gguf_context* read_gguf_metadata_ctx(const std::string& shard) {
+    int fd = open(shard.c_str(), O_RDONLY);
+    if (fd < 0) return nullptr;
+
+    std::vector<uint8_t> buf;
+    struct gguf_context* ctx = nullptr;
+    size_t cap = 1 << 20;  // start at 1 MiB, grow as needed
+    const size_t max_cap = 64 << 20;  // metadata table should never approach this
+    bool ok = false;
+    for (;;) {
+        buf.resize(cap);
+        ssize_t rd = pread(fd, buf.data(), cap, 0);
+        if (rd < 0 || (size_t)rd < cap) break;
+        struct gguf_init_params params = { false, nullptr };
+        ctx = gguf_init_from_buffer(buf.data(), cap, params);
+        if (!ctx) {
+            // A null return on a valid file means the buffer was too small to
+            // hold the full metadata (gguf aborts the parse rather than
+            // returning a partial ctx). Grow and retry; only give up if we've
+            // hit the cap. This keeps the read metadata-only (no full mmap).
+            if (cap >= max_cap) break;
+            cap *= 2;
+            continue;
+        }
+        // data_offset is the end of the metadata region; if it lies beyond what
+        // we read, the metadata is larger than our buffer - grow and retry.
+        if (gguf_get_data_offset(ctx) <= cap) { ok = true; break; }
+        gguf_free(ctx);
+        ctx = nullptr;
+        if (cap >= max_cap) break;
+        cap *= 2;
+    }
+    close(fd);
+    if (!ok && ctx) { gguf_free(ctx); ctx = nullptr; }
+    return ctx;
+}
+
+bool SteppeLoader::parse_gguf_manifest() {
     // Dense model: nothing to stream. Skip the whole scan (and avoid emitting
     // the misleading "Parsed N expert tensors" line for a non-MoE model).
     if (!enabled_) {
         std::cerr << "[Guanaco Storage] Skipping expert manifest (streaming disabled)\n";
-        gguf_free(ctx);
         return true;
     }
 
-    manifest_.reserve(n_tensors);
+    // Scan every shard, not just shard 1. A sharded GGUF splits the
+    // expert tensors across shards, so reading only the first shard would
+    // miss most of them (e.g. a 4-shard 120B model registering 0
+    // expert tensors and silently falling back to a plain mmap).
+    // Each shard's metadata is read with a small pread (KB-MB), never a full
+    // mmap, so discovering all shards costs almost no RAM.
+    std::vector<std::string> shards = build_shard_paths(config_.gguf_path);
 
     const int model_experts = model_config_.num_experts;
+    for (const auto& shard : shards) {
+        struct gguf_context* ctx = read_gguf_metadata_ctx(shard);
+        if (!ctx) continue;
 
-    for (int64_t i = 0; i < n_tensors; ++i) {
-        const char* name = gguf_get_tensor_name(ctx, i);
-        if (!name) continue;
+        int64_t n_tensors = gguf_get_n_tensors(ctx);
+        size_t data_offset = gguf_get_data_offset(ctx);
 
-        enum ggml_type type = gguf_get_tensor_type(ctx, i);
-        size_t offset = gguf_get_tensor_offset(ctx, i);
-        size_t byte_size = gguf_get_tensor_size(ctx, i);
+        for (int64_t i = 0; i < n_tensors; ++i) {
+            const char* name = gguf_get_tensor_name(ctx, i);
+            if (!name) continue;
 
-        std::string name_str(name);
-        int layer_idx = -1;
-        int expert_idx = -1;
-        int tensor_type = -1;
-        int num_experts_in_tensor = 1;
-        
-        // Get tensor dimensions if available
-        auto dim_it = tensor_dims.find(name_str);
-        std::array<int64_t, 4> dims = {1, 1, 1, 1};
-        uint32_t n_dims = 1;
-        if (dim_it != tensor_dims.end()) {
-            dims = dim_it->second;
-            n_dims = tensor_n_dims[name_str];
-            
-            // Expert count is the trailing (highest-indexed) dim > 1,
-            // matching the detection in llama-model.cpp:load_tensors.
-            for (int d = 3; d >= 0; --d) {
-                if (dims[d] > 1) {
-                    num_experts_in_tensor = static_cast<int>(dims[d]);
-                    break;
+            enum ggml_type type = gguf_get_tensor_type(ctx, i);
+            size_t offset = gguf_get_tensor_offset(ctx, i);
+            size_t byte_size = gguf_get_tensor_size(ctx, i);
+            const int64_t* ne = gguf_get_tensor_ne(ctx, i);
+
+            std::string name_str(name);
+            int layer_idx = -1;
+            int expert_idx = -1;
+            int tensor_type = -1;
+            int num_experts_in_tensor = 1;
+
+            // Expert count is the trailing (highest-indexed) dim > 1.
+            if (ne) {
+                for (int d = GGML_MAX_DIMS - 1; d >= 0; --d) {
+                    if (ne[d] > 1) {
+                        num_experts_in_tensor = static_cast<int>(ne[d]);
+                        break;
+                    }
                 }
             }
-        }
-        
-        if (name_str.find("ffn_up_exps") != std::string::npos ||
-            name_str.find("ffn_down_exps") != std::string::npos ||
-            name_str.find("ffn_gate_exps") != std::string::npos ||
-            name_str.find(".experts.") != std::string::npos ||
-            name_str.find(".exps.") != std::string::npos) {
-            
-            const char* layer_marker = strstr(name, "blk.");
-            if (!layer_marker) layer_marker = strstr(name, "layers.");
-            if (layer_marker) {
-                char* endptr;
-                layer_idx = strtol(layer_marker + 4, &endptr, 10);
-            }
-            
-            const char* expert_marker = strstr(name, ".experts.");
-            if (!expert_marker) expert_marker = strstr(name, "exps.");
-            if (expert_marker) {
-                if (strstr(expert_marker, ".experts.")) {
-                    expert_idx = strtol(expert_marker + 9, nullptr, 10);
-                } else {
-                    expert_idx = strtol(expert_marker + 5, nullptr, 10);
+
+            if (name_str.find("ffn_up_exps") != std::string::npos ||
+                name_str.find("ffn_down_exps") != std::string::npos ||
+                name_str.find("ffn_gate_exps") != std::string::npos ||
+                name_str.find(".experts.") != std::string::npos ||
+                name_str.find(".exps.") != std::string::npos) {
+
+                const char* layer_marker = strstr(name, "blk.");
+                if (!layer_marker) layer_marker = strstr(name, "layers.");
+                if (layer_marker) {
+                    char* endptr;
+                    layer_idx = strtol(layer_marker + 4, &endptr, 10);
                 }
+
+                const char* expert_marker = strstr(name, ".experts.");
+                if (!expert_marker) expert_marker = strstr(name, "exps.");
+                if (expert_marker) {
+                    if (strstr(expert_marker, ".experts.")) {
+                        expert_idx = strtol(expert_marker + 9, nullptr, 10);
+                    } else {
+                        expert_idx = strtol(expert_marker + 5, nullptr, 10);
+                    }
+                }
+
+                tensor_type = (name_str.find("gate") != std::string::npos) ? 2 : 0;
             }
-            
-            tensor_type = (name_str.find("gate") != std::string::npos) ? 2 : 0;
+
+            // Only treat a tensor as a real MoE expert block if its trailing
+            // dim is a genuine expert count. A dense FFN tensor (trailing
+            // dim = hidden_size) would otherwise be mis-parsed as one giant
+            // "expert" (thrashing / OOM on DeepSeek-70B, Seed-OSS).
+            if (num_experts_in_tensor > 1 && model_experts > 1 &&
+                num_experts_in_tensor != model_experts) {
+                continue;
+            }
+
+            if (layer_idx >= 0 || expert_idx >= 0 || num_experts_in_tensor > 1) {
+                ExpertManifestEntry entry;
+                entry.tensor_name = std::move(name_str);
+                entry.layer_idx = layer_idx;
+                entry.expert_idx = expert_idx;
+                // file_offset is relative to THIS shard's data start.
+                entry.file_offset = data_offset + offset;
+                entry.byte_size = byte_size;
+                entry.num_experts_in_tensor = num_experts_in_tensor;
+                entry.tensor_type = tensor_type;
+                entry.quantization_type = ggml_type_name(type);
+                if (ne) {
+                    for (uint32_t d = 0; d < GGML_MAX_DIMS; ++d) {
+                        entry.tensor_dims[d] = ne[d];
+                    }
+                }
+                entry.tensor_n_dims = 0;
+                if (ne) {
+                    for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+                        if (ne[d] > 1) entry.tensor_n_dims = d + 1;
+                    }
+                }
+
+                if (num_experts_in_tensor > 1) {
+                    entry.expert_slice_size = byte_size / num_experts_in_tensor;
+                }
+
+                manifest_.push_back(std::move(entry));
+                layer_experts_[layer_idx].push_back(manifest_.back());
+            }
         }
 
-        // Only treat a tensor as a real MoE expert block if its trailing dim is
-        // a genuine expert count. A dense FFN tensor (e.g. ffn_up_exps.weight
-        // with trailing dim = hidden_size) has num_experts_in_tensor set to the
-        // hidden size; requiring it to match the model's MoE expert count
-        // avoids mis-parsing dense weights as one giant "expert" (which caused
-        // thrashing / OOM on DeepSeek-70B and Seed-OSS).
-        if (num_experts_in_tensor > 1 && model_experts > 1 &&
-            num_experts_in_tensor != model_experts) {
-            continue;
-        }
-
-        if (layer_idx >= 0 || expert_idx >= 0 || num_experts_in_tensor > 1) {
-            ExpertManifestEntry entry;
-            entry.tensor_name = std::move(name_str);
-            entry.layer_idx = layer_idx;
-            entry.expert_idx = expert_idx;
-            entry.file_offset = data_offset + offset;
-            entry.byte_size = byte_size;
-            entry.num_experts_in_tensor = num_experts_in_tensor;
-            entry.tensor_type = tensor_type;
-            entry.quantization_type = ggml_type_name(type);
-            entry.tensor_n_dims = n_dims;
-            for (uint32_t d = 0; d < 4; ++d) {
-                entry.tensor_dims[d] = dims[d];
-            }
-            
-            // Calculate expert slice info
-            if (num_experts_in_tensor > 1) {
-                entry.expert_slice_size = byte_size / num_experts_in_tensor;
-            }
-            
-            manifest_.push_back(std::move(entry));
-            layer_experts_[layer_idx].push_back(manifest_.back());
-        }
+        gguf_free(ctx);
     }
 
-    gguf_free(ctx);
-    
-    std::cerr << "[Guanaco Storage] Parsed " << manifest_.size() << " expert tensors across " 
-              << layer_experts_.size() << " layers" << std::endl;
-    
+    std::cerr << "[Guanaco Storage] Parsed " << manifest_.size() << " expert tensors across "
+              << layer_experts_.size() << " layers (from " << shards.size() << " shard(s))\n";
+
     return true;
 }
 
@@ -567,6 +668,14 @@ void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
     t.trans.assign((size_t)num_experts * num_experts, 0);
 
     expert_tensors_.emplace(name, std::move(t));
+
+    // Track the set of MoE layer indices (sorted, unique) so pilot can predict
+    // for the next MoE layer even when MoE blocks are sparse / non-contiguous.
+    if (std::find(moe_layers_.begin(), moe_layers_.end(), layer) == moe_layers_.end()) {
+        auto it = std::lower_bound(moe_layers_.begin(), moe_layers_.end(), layer);
+        moe_layers_.insert(it, layer);
+    }
+
     std::cerr << "[Guanaco HerdCache] Tracking " << name
               << " (" << num_experts << " experts, " << (byte_size / (1024*1024)) << " MB fused)\n";
 }
@@ -636,10 +745,17 @@ void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
     }
 }
 
- void SteppeLoader::pilot_prefetch_next_layer(int layer, const int* expert_ids, int n) {
-    if (!enabled_ || !config_.use_pilot || expert_ids == nullptr || n <= 0) return;
-    const int next = layer + 1;
-    if (next >= (int)model_config_.num_hidden_layers) return;
+  void SteppeLoader::pilot_prefetch_next_layer(int layer, const int* expert_ids, int n) {
+     if (!enabled_ || !config_.use_pilot || expert_ids == nullptr || n <= 0) return;
+     // Sparse MoE: not every layer is a routed MoE block, and the MoE layers
+     // are not contiguous (e.g. nemotron_h_moe / afmoe sit at blk.1,3,6,8...).
+     // Predict for the NEXT MoE layer after this one, not layer+1, which would
+     // skip over the dense layers and never match a tracked expert tensor.
+     int next = -1;
+     for (int L : moe_layers_) {
+         if (L > layer) { next = L; break; }
+     }
+     if (next < 0) return;
 
     // For each expert selected at this layer, gather the top predicted
     // experts at the next layer from the learned transition matrix, then
@@ -679,7 +795,7 @@ void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
     }
     if (predicted.empty()) return;
 
-    ++pilot_calls_;
+     ++pilot_calls_;
     pilot_slice_reads_ += predicted.size();
     std::vector<int> ids(predicted.begin(), predicted.end());
     // Reuse the same prefetch path; it classifies hits/misses and copies.
@@ -783,15 +899,61 @@ size_t SteppeLoader::load_imatrix_prior(const std::string& model_path) {
         return 0;
     }
 
-    // Resolve the sibling imatrix file: "<path>.imatrix.gguf".
-    // Mirror the convention used by llama.cpp's imatrix/quantize tools
-    // (e.g. model.gguf -> model.gguf.imatrix.gguf).
-    std::string imatrix_path = model_path + ".imatrix.gguf";
+    // Resolve the sibling imatrix file. First try the exact convention used by
+    // llama.cpp's imatrix/quantize tools (model.gguf -> model.gguf.imatrix.gguf),
+    // then fall back to scanning the GGUF's directory for any *imatrix*.gguf
+    // that shares the model's base name (e.g. model.imatrix.gguf, or a
+    // modelname-Q8_0.imatrix.gguf sitting next to the shard).
+    std::vector<std::string> candidates;
+    candidates.push_back(model_path + ".imatrix.gguf");
 
-    struct stat st{};
-    if (stat(imatrix_path.c_str(), &st) != 0) {
-        std::cerr << "[Guanaco HerdCache] No imatrix prior found ("
-                  << imatrix_path << "); cold-start pinning will use runtime stats.\n";
+    {
+        std::string dir = model_path.substr(0, model_path.find_last_of('/') + 1);
+        std::string base = model_path.substr(model_path.find_last_of('/') + 1);
+        // Strip a trailing shard suffix "-NNNNN-of-NNNN" and/or ".gguf" to get
+        // a search base, then accept any *imatrix*.gguf containing that base.
+        std::string base_key = base;
+        auto dot = base_key.find(".gguf");
+        if (dot != std::string::npos) base_key = base_key.substr(0, dot);
+        auto of = base_key.find("-of-");
+        if (of != std::string::npos) base_key = base_key.substr(0, of);
+
+        DIR* d = opendir(dir.c_str());
+        if (d != nullptr) {
+            struct dirent* de = nullptr;
+            std::string fallback;
+            while ((de = readdir(d)) != nullptr) {
+                std::string nm(de->d_name);
+                if (nm.find("imatrix") == std::string::npos) continue;
+                if (nm.find(".gguf") == std::string::npos) continue;
+                std::string full = dir + nm;
+                if (full == candidates[0]) continue;
+                // Prefer an imatrix whose name contains the quant-specific base
+                // (e.g. "Trinity-Mini-Q6_K.imatrix.gguf"), but fall back to any
+                // *imatrix*.gguf in the dir (e.g. "Trinity-Mini.imatrix.gguf")
+                // since the imatrix is often keyed to the base model name.
+                if (!base_key.empty() && nm.find(base_key) != std::string::npos) {
+                    candidates.push_back(std::move(full));
+                } else if (fallback.empty()) {
+                    fallback = std::move(full);
+                }
+            }
+            if (candidates.size() == 1 && !fallback.empty()) {
+                candidates.push_back(std::move(fallback));
+            }
+            closedir(d);
+        }
+    }
+
+    std::string imatrix_path;
+    for (const auto& c : candidates) {
+        struct stat st{};
+        if (stat(c.c_str(), &st) == 0) { imatrix_path = c; break; }
+    }
+
+    if (imatrix_path.empty()) {
+        std::cerr << "[Guanaco HerdCache] No imatrix prior found near "
+                  << model_path << " (*imatrix*.gguf); cold-start pinning will use runtime stats.\n";
         imatrix_seeded_ = true;  // don't retry
         return 0;
     }
