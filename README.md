@@ -77,6 +77,9 @@ overrides the auto default.
 Deep dive on the pinning knob and the resident/hit-rate tradeoff: see
 [`docs/PINNING.md`](docs/PINNING.md).
 
+Measured results (including the 120 GB-in-4 GB run and the Guanaco-vs-GPU-offload
+comparison): see [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
 ## What you'll see (observability)
 
 Guanaco logs to stderr with the `[Guanaco HerdCache]` / `[Guanaco Storage]`
