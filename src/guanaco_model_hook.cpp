@@ -51,6 +51,14 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
         const char* pilot_env = std::getenv("GUANACO_PILOT");
         sl_config.use_pilot = (pilot_env == nullptr) ? true : (std::atoi(pilot_env) != 0);
 
+        // Pilot pruning: cover the top GUANACO_PILOT_MASS fraction of the
+        // transition mass (default 0.9). 1.0 disables pruning (full top-K).
+        const char* pmass_env = std::getenv("GUANACO_PILOT_MASS");
+        if (pmass_env != nullptr) {
+            float pm = std::atof(pmass_env);
+            if (pm > 0.0f && pm <= 1.0f) sl_config.pilot_mass = pm;
+        }
+
         // imatrix cold-start prior: default ON (GUANACO_IMATRIX).
         const char* imatrix_env = std::getenv("GUANACO_IMATRIX");
         sl_config.use_imatrix = (imatrix_env == nullptr) ? true : (std::atoi(imatrix_env) != 0);

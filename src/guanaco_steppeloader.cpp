@@ -783,16 +783,31 @@ void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
         }
         if (!any) continue;  // not enough history yet; skip
 
-        // Keep the top-K most-likely next experts (bounded by this tensor's
-        // dynamic budget).
+        // Rank by predicted-next score (descending).
         const int K = (t.budget > 0 ? t.budget : (int)config_.max_active_experts);
         std::vector<int> order(E);
         for (int i = 0; i < E; ++i) order[i] = i;
         std::sort(order.begin(), order.end(), [&](int a, int b) {
             return score[a] > score[b];
         });
-        for (int r = 0; r < K && r < E; ++r) {
+
+        // Pilot K-pruning: instead of reading the full top-K, keep only the
+        // experts that together cover pilot_mass of the cumulative transition
+        // mass, then cap at K. This drops the long tail of unlikely experts
+        // (which would be wasteful disk reads) while preserving the dominant
+        // predictions. 1.0 keeps the full top-K.
+        uint64_t total_mass = 0;
+        for (int i = 0; i < E; ++i) total_mass += score[i];
+        const uint64_t cutoff = total_mass == 0 ? 0
+            : (uint64_t)(config_.pilot_mass * (double)total_mass);
+        uint64_t acc = 0;
+        int kept = 0;
+        for (int r = 0; r < E; ++r) {
+            if (kept >= K) break;                 // never exceed the budget
+            if (acc >= cutoff && kept > 0) break; // mass target reached
             predicted.insert(order[r]);
+            acc += score[order[r]];
+            ++kept;
         }
     }
     if (predicted.empty()) return;

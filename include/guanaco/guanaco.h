@@ -87,6 +87,10 @@ struct GUANACO_API SteppeLoaderConfig {
     bool use_io_uring = true;
     bool use_madvise = true;
     bool use_pilot = true;     // cross-layer lookahead prefetch (default on)
+    // Pilot prefetch pruning: cover at most this fraction of the cumulative
+    // (from->to) transition mass, keeping only the dominant predicted experts
+    // and dropping the long tail. 1.0 = read the full top-K (no pruning).
+    float pilot_mass = 0.9f;
     bool use_imatrix = true;   // seed hot pins from "<model>.imatrix.gguf" prior
     bool dontneed = true;      // madvise(DONTNEED) slab slices after copy (drop page-cache)
     size_t io_queue_depth = 256;
