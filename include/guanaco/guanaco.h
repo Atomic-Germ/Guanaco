@@ -73,6 +73,12 @@ struct GUANACO_API ExpertTensor {
     // the most likely experts at the next layer are read ahead while the
     // current MoE block computes. Row-major over num_experts^2.
     std::vector<uint64_t> trans;          // num_experts * num_experts
+    // Per-tensor dynamic resident budget (slots). Rebalanced by
+    // SteppeLoader::recompute_budgets() so busy tensors get more slots than
+    // idle ones, while the aggregate footprint stays within the global
+    // max_active_experts * n_tensors envelope. Initialized to the global
+    // budget at registration; never exceeds it.
+    int         budget          = 0;
 };
 
 struct GUANACO_API SteppeLoaderConfig {
@@ -231,6 +237,11 @@ private:
     std::vector<int>         pilot_from_ids_;        // selected ids of pilot_from_layer_
     uint64_t                 eclock_ = 0;            // monotonic LRU recency counter
     void maybe_pin_hot_experts();
+    // Rebalance per-tensor resident budgets (t.budget) from observed distinct-
+    // expert usage so the global max_active_experts cap is allocated where it
+    // is actually needed. Idle tensors shrink, busy ones grow; the aggregate
+    // stays within max_active_experts * n_tensors.
+    void recompute_budgets();
     // LRU eviction: keep at most max_active_experts resident (pinned +
     // warm) slices per tensor. Non-pinned slices are evicted least-
     // recently-used first; their slab pages are dropped (safe because a

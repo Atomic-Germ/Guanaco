@@ -666,6 +666,7 @@ void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
     t.pinned.assign(num_experts, false);
     t.last_used.assign(num_experts, 0);
     t.trans.assign((size_t)num_experts * num_experts, 0);
+    t.budget = (int)config_.max_active_experts;  // initial default per-tensor cap
 
     expert_tensors_.emplace(name, std::move(t));
 
@@ -782,8 +783,9 @@ void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
         }
         if (!any) continue;  // not enough history yet; skip
 
-        // Keep the top-K most-likely next experts (bounded by pin budget).
-        const int K = config_.max_active_experts;
+        // Keep the top-K most-likely next experts (bounded by this tensor's
+        // dynamic budget).
+        const int K = (t.budget > 0 ? t.budget : (int)config_.max_active_experts);
         std::vector<int> order(E);
         for (int i = 0; i < E; ++i) order[i] = i;
         std::sort(order.begin(), order.end(), [&](int a, int b) {
@@ -809,7 +811,7 @@ void SteppeLoader::touch(ExpertTensor& t, int id) {
 }
 
 void SteppeLoader::evict_to_budget(ExpertTensor& t) {
-    const int budget = config_.max_active_experts;
+    const int budget = t.budget > 0 ? t.budget : (int)config_.max_active_experts;
     if (budget <= 0 || t.mmap_base == nullptr) return;
 
     // Resident = pinned OR loaded (warm). Pinned are exempt from eviction.
@@ -865,7 +867,45 @@ void SteppeLoader::evict_to_budget(ExpertTensor& t) {
     reclaim(false);   // PASS B: fallback, evict LRU among all non-pinned
 }
 
+void SteppeLoader::recompute_budgets() {
+    const int global = (int)config_.max_active_experts;
+    if (global <= 0 || expert_tensors_.empty()) return;
+
+    // Count distinct (ever-used) experts per tensor as the demand signal.
+    std::vector<std::pair<ExpertTensor*, int>> demand;
+    demand.reserve(expert_tensors_.size());
+    int max_distinct = 1;
+    long total_demand = 0;
+    for (auto& kv : expert_tensors_) {
+        ExpertTensor& t = kv.second;
+        int distinct = 0;
+        for (int i = 0; i < t.num_experts; ++i) {
+            if (t.total_hits[i] > 0) ++distinct;
+        }
+        // A tensor with zero runtime history still earns a floor of 1 so it
+        // can hold its top expert if routing later activates it.
+        if (distinct == 0) distinct = 1;
+        demand.push_back({&t, distinct});
+        if (distinct > max_distinct) max_distinct = distinct;
+        total_demand += distinct;
+    }
+
+    // Allocate each tensor a share of the global per-tensor cap proportional
+    // to its distinct-expert demand, clamped to [1, global]. This keeps the
+    // aggregate at or below global * n_tensors while steering slots to the
+    // tensors that actually cycle through many experts.
+    const int n = (int)demand.size();
+    const long total_cap = (long)global * n;
+    for (auto& d : demand) {
+        int share = (int)((long)d.second * total_cap / total_demand);
+        if (share < 1) share = 1;
+        if (share > global) share = global;
+        d.first->budget = share;
+    }
+}
+
 void SteppeLoader::maybe_pin_hot_experts() {
+    recompute_budgets();
     for (auto& kv : expert_tensors_) {
         ExpertTensor& t = kv.second;
         if (t.num_experts <= 0 || t.mmap_base == nullptr) continue;
@@ -877,10 +917,10 @@ void SteppeLoader::maybe_pin_hot_experts() {
             return t.window_hits[a] > t.window_hits[b];
         });
 
-        // Pin the top-K experts (bounded by config), skipping those already
-        // pinned. A pinned expert is faulted in (MADV_WILLNEED) and never
-        // evicted, so its slice stays resident for the whole run.
-        const int topk = config_.max_active_experts;
+        // Pin the top-K experts (bounded by this tensor's dynamic budget),
+        // skipping those already pinned. A pinned expert is faulted in
+        // (MADV_WILLNEED) and never evicted, so its slice stays resident.
+        const int topk = (t.budget > 0 ? t.budget : (int)config_.max_active_experts);
         for (int rank = 0; rank < topk && rank < t.num_experts; ++rank) {
             int id = order[rank];
             if (t.pinned[id]) continue;
@@ -1024,6 +1064,7 @@ size_t SteppeLoader::load_imatrix_prior(const std::string& model_path) {
 
 void SteppeLoader::pin_from_seeded_totals() {
     size_t pinned_before = pinned_total_;
+    recompute_budgets();
     for (auto& kv : expert_tensors_) {
         ExpertTensor& t = kv.second;
         if (t.num_experts <= 0) continue;
@@ -1036,7 +1077,7 @@ void SteppeLoader::pin_from_seeded_totals() {
             return t.total_hits[a] > t.total_hits[b];
         });
 
-        const int topk = config_.max_active_experts;
+        const int topk = (t.budget > 0 ? t.budget : (int)config_.max_active_experts);
         for (int rank = 0; rank < topk && rank < t.num_experts; ++rank) {
             int id = order[rank];
             if (t.pinned[id]) continue;
@@ -1103,9 +1144,18 @@ void SteppeLoader::log_final_summary() {
     const size_t n_tensors = expert_tensors_.size();
     const double per_tensor = n_tensors ? (double)pinned_current_ / n_tensors : 0.0;
 
+    int bmin = (int)config_.max_active_experts, bmax = 0;
+    for (auto& kv : expert_tensors_) {
+        int b = kv.second.budget;
+        if (b < bmin) bmin = b;
+        if (b > bmax) bmax = b;
+    }
+    if (n_tensors == 0) { bmin = 0; bmax = 0; }
+
     std::cerr << "[Guanaco HerdCache] final: pin budget="
-              << config_.max_active_experts
-              << " per tensor, experts pinned now=" << pinned_current_
+              << config_.max_active_experts << " (dynamic per-tensor "
+              << bmin << ".." << bmax << ")"
+              << ", experts pinned now=" << pinned_current_
               << " (" << per_tensor << " avg / tensor across " << n_tensors
               << " tensors)"
               << ", pin cache=" << pct << "% resident (" << ppct
