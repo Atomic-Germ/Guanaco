@@ -198,6 +198,7 @@ private:
 
     // Hot-expert pinning state.
     static constexpr float   kHitDecay_   = 0.95f;   // EWMA decay per record_routing()
+    static constexpr float   kHotProtect_ = 1.0f;    // window_hits above this are protected from PASS-A eviction
     static constexpr size_t  kWarmupLayers_   = 200;  // per-layer records before pinning
     static constexpr size_t  kLogEveryLayers_ = 400;  // summary cadence (per-layer records)
     static constexpr size_t  kPinRateEvery_   = 50;   // pin-cache hit-rate log cadence (calls)
@@ -215,6 +216,17 @@ private:
     uint64_t                 pilot_calls_ = 0;     // pilot prefetch invocations
     uint64_t                 pilot_slice_reads_ = 0; // expert slices pulled by pilot
     uint64_t                 evictions_ = 0;       // LRU slab slices reclaimed
+    // Eviction-churn instrumentation (tuning data only; no behavior change):
+    //  - evict_hot_:   evictions of experts with meaningful windowed hotness
+    //                   (these are the candidates a hot-protect policy would save)
+    //  - evict_reread_: evictions where the same (tensor,id) was later read
+    //                   back from disk within kChurnWindow eclock ticks (wasted)
+    uint64_t                 evict_hot_      = 0;
+    uint64_t                 evict_reread_  = 0;
+    struct EvictRec { ExpertTensor* t; int id; uint64_t clock; bool used; };
+    static constexpr uint64_t kChurnWindow_ = 64;   // eclock ticks (~tokens) to count a re-read as churn
+    std::vector<EvictRec>    evict_log_;             // bounded FIFO of recent evictions
+    static constexpr size_t   kEvictLogMax_ = 8192;
     int                      pilot_from_layer_ = -1;  // layer whose ids are pending as "from"
     std::vector<int>         pilot_from_ids_;        // selected ids of pilot_from_layer_
     uint64_t                 eclock_ = 0;            // monotonic LRU recency counter

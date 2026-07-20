@@ -824,23 +824,45 @@ void SteppeLoader::evict_to_budget(ExpertTensor& t) {
     // a later access by mul_mat_id transparently page-faults the slice back
     // from the GGUF file. The bytes are identical (same file-backed address),
     // so there is no correctness risk - only a disk read on next use.
+    //
+    // Two-pass eviction: PASS A only reclaims COLD slices (windowed hotness
+    // below kHotProtect_), protecting hot experts from pure-LRU thrash even when
+    // their last_used tick has gone stale. PASS B is a fallback that, if we are
+    // still over budget after cold slices are gone, evicts LRU among ALL
+    // non-pinned slices (hot included) so we always meet the budget. This can
+    // only reduce evictions of useful experts versus the old single-pass LRU.
     int to_evict = resident - budget;
-    while (to_evict > 0) {
-        int victim = -1;
-        uint64_t oldest = UINT64_MAX;
-        for (int i = 0; i < t.num_experts; ++i) {
-            if (t.pinned[i] || !t.loaded[i]) continue;
-            if (t.last_used[i] < oldest) { oldest = t.last_used[i]; victim = i; }
-        }
-        if (victim < 0) break;  // nothing left to evict (all pinned)
 
-        ++evictions_;
-        // Gate: loaded[victim]=false means the next select re-faults it.
-        t.loaded[victim] = false;
-        void* addr = static_cast<char*>(t.mmap_base) + (size_t)victim * t.per_expert_bytes;
-        madvise(addr, t.per_expert_bytes, MADV_DONTNEED);
-        --to_evict;
-    }
+    auto reclaim = [&](bool cold_only) -> int {
+        int reclaimed = 0;
+        while (to_evict > 0) {
+            int victim = -1;
+            uint64_t oldest = UINT64_MAX;
+            for (int i = 0; i < t.num_experts; ++i) {
+                if (t.pinned[i] || !t.loaded[i]) continue;
+                if (cold_only && t.window_hits[i] > kHotProtect_) continue;
+                if (t.last_used[i] < oldest) { oldest = t.last_used[i]; victim = i; }
+            }
+            if (victim < 0) break;  // nothing left to evict in this pass
+
+            ++evictions_;
+            // Tuning instrumentation: tally how many were "hot" (a hot-protect
+            // policy keeps these in PASS A; only PASS B may still drop them).
+            if (t.window_hits[victim] > kHotProtect_) ++evict_hot_;
+            if (evict_log_.size() >= kEvictLogMax_) evict_log_.erase(evict_log_.begin());
+            evict_log_.push_back({&t, victim, eclock_, false});
+            // Gate: loaded[victim]=false means the next select re-faults it.
+            t.loaded[victim] = false;
+            void* addr = static_cast<char*>(t.mmap_base) + (size_t)victim * t.per_expert_bytes;
+            madvise(addr, t.per_expert_bytes, MADV_DONTNEED);
+            --to_evict;
+            ++reclaimed;
+        }
+        return reclaimed;
+    };
+
+    reclaim(true);    // PASS A: cold slices only, protect hot experts
+    reclaim(false);   // PASS B: fallback, evict LRU among all non-pinned
 }
 
 void SteppeLoader::maybe_pin_hot_experts() {
@@ -1088,14 +1110,19 @@ void SteppeLoader::log_final_summary() {
               << " tensors)"
               << ", pin cache=" << pct << "% resident (" << ppct
               << "% hot-pinned)"
-              << ", " << total << " expert accesses over "
-              << prefetch_calls_ << " prefetch calls"
-              << (config_.use_pilot
-                  ? (", pilot: " + std::to_string(pilot_calls_) + " calls / " + std::to_string(pilot_slice_reads_) + " slices")
-                  : "")
-              << ", evictions=" << evictions_
-              << (imatrix_seeded_ ? ", imatrix prior used" : "")
-              << "\n";
+               << ", " << total << " expert accesses over "
+               << prefetch_calls_ << " prefetch calls"
+               << ", evictions=" << evictions_
+               << (config_.use_pilot
+                   ? (", pilot: " + std::to_string(pilot_calls_) + " calls / " + std::to_string(pilot_slice_reads_) + " slices")
+                   : "")
+               << (evictions_ > 0
+                   ? (", evict_hot=" + std::to_string(evict_hot_) +
+                      " evict_reread=" + std::to_string(evict_reread_) +
+                      " (" + std::to_string((evict_reread_ * 100) / evictions_) + "% churn)")
+                   : "")
+               << (imatrix_seeded_ ? ", imatrix prior used" : "")
+               << "\n";
 }
 
 std::vector<SteppeLoader::HotExpertStats> SteppeLoader::get_hot_expert_stats() const {
@@ -1145,6 +1172,17 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
                 ++warm_hits_;
             } else {
                 ++disk_miss_;
+                // Tuning instrumentation: was this just evicted recently? If so
+                // it's churn (we dropped then re-read the same slice). Scan the
+                // small evict log for a matching (tensor,id) within the window.
+                for (auto& rec : evict_log_) {
+                    if (!rec.used && rec.t == &t && rec.id == id &&
+                        eclock_ - rec.clock < kChurnWindow_) {
+                        ++evict_reread_;
+                        rec.used = true;
+                        break;
+                    }
+                }
                 want.insert(id);
             }
         }
