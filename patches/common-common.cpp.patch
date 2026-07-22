@@ -1,14 +1,18 @@
 diff --git a/common/common.cpp b/common/common.cpp
-index 8f13217ab..743c5716b 100644
+index 8f13217ab..bc3650651 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -1563,6 +1563,10 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
+@@ -1563,6 +1563,14 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
      mparams.use_direct_io   = params.use_direct_io;
      mparams.use_mlock       = params.use_mlock;
      mparams.check_tensors   = params.check_tensors;
 +#ifdef GUANACO_ENABLED
 +    mparams.use_guanaco_streaming = params.use_guanaco_streaming;
 +    mparams.guanaco_max_experts   = params.guanaco_max_experts;
++    mparams.guanaco_io_uring      = params.guanaco_io_uring;
++    mparams.guanaco_pilot         = params.guanaco_pilot;
++    mparams.guanaco_pilot_mass    = params.guanaco_pilot_mass;
++    mparams.guanaco_imatrix       = params.guanaco_imatrix;
 +#endif
      mparams.use_extra_bufts = !params.no_extra_bufts;
      mparams.no_host         = params.no_host;

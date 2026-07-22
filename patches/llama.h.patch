@@ -1,8 +1,8 @@
 diff --git a/include/llama.h b/include/llama.h
-index a311ac202..8ba5b951f 100644
+index a311ac202..7625af0bf 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -328,6 +328,11 @@ extern "C" {
+@@ -328,6 +328,15 @@ extern "C" {
          bool use_extra_bufts; // use extra buffer types (used for weight repacking)
          bool no_host;         // bypass host buffer allowing extra buffers to be used
          bool no_alloc;        // only load metadata and simulate memory allocations
@@ -10,11 +10,15 @@ index a311ac202..8ba5b951f 100644
 +#ifdef GUANACO_ENABLED
 +        bool   use_guanaco_streaming;   // enable disk streaming for MoE experts
 +        int32_t guanaco_max_experts;    // max experts to keep in memory (-1 = auto)
++        bool   guanaco_io_uring;        // use io_uring for async disk reads (default: true)
++        bool   guanaco_pilot;           // cross-layer lookahead prefetch (default: true)
++        float  guanaco_pilot_mass;      // pilot prefetch pruning mass fraction (0..1, default: 0.9)
++        bool   guanaco_imatrix;         // seed hot pins from <model>.imatrix.gguf (default: true)
 +#endif
      };
  
      struct llama_sampler_seq_config {
-@@ -538,6 +543,11 @@ extern "C" {
+@@ -538,6 +547,11 @@ extern "C" {
      LLAMA_API bool llama_supports_gpu_offload(void);
      LLAMA_API bool llama_supports_rpc        (void);
  

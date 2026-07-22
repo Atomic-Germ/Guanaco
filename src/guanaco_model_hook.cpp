@@ -25,47 +25,14 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
     // AFTER CPU_REPACK completes (avoiding the repack reading empty slab data).
     std::vector<std::string> registered_tensors_;
 
-    GuanacoModelHookImpl(const char* path, size_t max_active_experts)
+    GuanacoModelHookImpl(const char* path, const SteppeLoaderConfig& config)
         : model_path(path ? path : "") {
-        sl_config.gguf_path      = model_path;
-        // -1 means "auto": keep a modest multiple of the router's top-k in
-        // RAM so hot experts stay resident while cold ones stream on demand.
-        // The GUANACO_MAX_EXPERTS env var overrides the API/default value,
-        // letting users tune how many hot experts stay pinned per tensor.
-        int resolved = (max_active_experts == size_t(-1)) ? 8 : (int)max_active_experts;
-        const char* env_val = std::getenv("GUANACO_MAX_EXPERTS");
-        if (env_val != nullptr) {
-            int env_int = std::atoi(env_val);
-            if (env_int > 0) {
-                resolved = env_int;
-            }
-        }
-        sl_config.max_active_experts = resolved;
-        sl_config.use_madvise   = true;
-        const char* iou_env = std::getenv("GUANACO_IO_URING");
-        sl_config.use_io_uring  = (iou_env == nullptr) ? true : (std::atoi(iou_env) != 0);
-
-        // Cross-layer PILOT lookahead prefetch: default ON (GUANACO_PILOT).
-        // It only hints future reads and never evicts hot experts, so a
-        // mispredict costs at most a wasted disk read, not correctness.
-        const char* pilot_env = std::getenv("GUANACO_PILOT");
-        sl_config.use_pilot = (pilot_env == nullptr) ? true : (std::atoi(pilot_env) != 0);
-
-        // Pilot pruning: cover the top GUANACO_PILOT_MASS fraction of the
-        // transition mass (default 0.9). 1.0 disables pruning (full top-K).
-        const char* pmass_env = std::getenv("GUANACO_PILOT_MASS");
-        if (pmass_env != nullptr) {
-            float pm = std::atof(pmass_env);
-            if (pm > 0.0f && pm <= 1.0f) sl_config.pilot_mass = pm;
-        }
-
-        // imatrix cold-start prior: default ON (GUANACO_IMATRIX).
-        const char* imatrix_env = std::getenv("GUANACO_IMATRIX");
-        sl_config.use_imatrix = (imatrix_env == nullptr) ? true : (std::atoi(imatrix_env) != 0);
+        sl_config = config;
+        sl_config.gguf_path = model_path;
+        sl_config.use_madvise = true;
         loader = std::make_unique<SteppeLoader>(sl_config);
         std::cerr << "[Guanaco HerdCache] pin budget (max_active_experts) = "
-                  << resolved << " experts per tensor"
-                  << (env_val ? " [from GUANACO_MAX_EXPERTS]" : "") << "\n";
+                  << sl_config.max_active_experts << " experts per tensor\n";
     }
 
     ~GuanacoModelHookImpl() override = default;
@@ -127,8 +94,8 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
     }
 };
 
-void* create_guanaco_model_hook(const char* model_path, size_t max_active_experts) {
-    return new GuanacoModelHookImpl(model_path, max_active_experts);
+void* create_guanaco_model_hook(const char* model_path, const SteppeLoaderConfig& config) {
+    return new GuanacoModelHookImpl(model_path, config);
 }
 
 void destroy_guanaco_model_hook(void* hook) {

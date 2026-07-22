@@ -67,7 +67,9 @@ struct GUANACO_API GuanacoModelHook {
 };
 
 // Factory function to create a model hook
-GUANACO_API void* create_guanaco_model_hook(const char* model_path, size_t max_active_experts);
+// Accepts a fully populated SteppeLoaderConfig; all env-var / CLI
+// processing is done upstream by llama.cpp/arg.cpp.
+GUANACO_API void* create_guanaco_model_hook(const char* model_path, const SteppeLoaderConfig& config);
 GUANACO_API void destroy_guanaco_model_hook(void* hook);
 
 } // namespace guanaco
