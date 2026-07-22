@@ -1,8 +1,30 @@
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 8a74e5f2b..e807b5995 100644
+index 8a74e5f2b..5d045def5 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -2448,6 +2448,55 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -384,7 +384,8 @@ common_models_handler common_models_handler_init(const common_params & params, l
+     opts.download_eagle3 = spec_type_draft_eagle3;
+     opts.download_dflash = spec_type_draft_dflash;
+     opts.download_mmproj = use_mmproj && !params.no_mmproj
+-                        && params.mmproj.path.empty() && params.mmproj.url.empty();
++                         && params.mmproj.path.empty() && params.mmproj.url.empty();
++    opts.download_imatrix = params.guanaco_imatrix;
+ 
+     if (!params.model.hf_repo.empty()) {
+         plan = common_download_get_hf_plan(params.model, opts);
+@@ -576,6 +577,11 @@ void common_models_handler_apply(common_models_handler & handler, common_params
+             }
+         });
+     }
++    if (!plan.imatrix.local_path.empty()) {
++        tasks.emplace_back(plan.imatrix, opts, [&]() {
++            hf_cache::finalize_file(plan.imatrix);
++        });
++    }
+     if (!plan.preset.local_path.empty()) {
+         tasks.emplace_back(plan.preset, opts, [&]() {
+             // if HF repo is a preset repo, we simply run server in router mode with the preset.ini file
+@@ -2448,6 +2454,55 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.use_mmap = value;
          }
      ).set_env("LLAMA_ARG_MMAP"));
