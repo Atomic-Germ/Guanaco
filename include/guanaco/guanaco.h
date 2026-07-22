@@ -215,7 +215,8 @@ private:
     size_t                   routing_records_ = 0;
     size_t                   pinned_total_    = 0;   // cumulative pin events
     size_t                   pinned_current_ = 0;   // distinct experts pinned now
-    bool                    imatrix_seeded_  = false;
+    bool                    imatrix_seeded_  = false;  // load attempted (don't retry)
+    bool                    imatrix_loaded_ = false;  // prior actually applied to pins
     // Pin-cache hit-rate instrumentation: counts of router-selected expert
     // accesses that were served by an already-pinned (hot) or already-loaded
     // (warm) slice versus ones that required a fresh disk read.

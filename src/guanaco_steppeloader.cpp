@@ -965,9 +965,6 @@ void SteppeLoader::maybe_pin_hot_experts() {
 }
 
 size_t SteppeLoader::load_imatrix_prior(const std::string& model_path) {
-    std::cerr << "[Guanaco HerdCache] load_imatrix_prior called: imatrix_seeded_=" << imatrix_seeded_
-              << " expert_tensors_.size()=" << expert_tensors_.size()
-              << " config_.use_imatrix=" << config_.use_imatrix << "\n";
     if (imatrix_seeded_ || expert_tensors_.empty()) {
         return 0;
     }
@@ -1077,6 +1074,7 @@ size_t SteppeLoader::load_imatrix_prior(const std::string& model_path) {
     if (seeded > 0) {
         pin_from_seeded_totals();
     }
+    imatrix_loaded_ = true;
     return seeded;
 }
 
@@ -1189,7 +1187,7 @@ void SteppeLoader::log_final_summary() {
                       " evict_reread=" + std::to_string(evict_reread_) +
                       " (" + std::to_string((evict_reread_ * 100) / evictions_) + "% churn)")
                    : "")
-               << (imatrix_seeded_ ? ", imatrix prior used" : "")
+               << (imatrix_loaded_ ? ", imatrix prior used" : "")
                << "\n";
 }
 
