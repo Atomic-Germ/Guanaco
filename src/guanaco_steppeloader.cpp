@@ -965,6 +965,9 @@ void SteppeLoader::maybe_pin_hot_experts() {
 }
 
 size_t SteppeLoader::load_imatrix_prior(const std::string& model_path) {
+    std::cerr << "[Guanaco HerdCache] load_imatrix_prior called: imatrix_seeded_=" << imatrix_seeded_
+              << " expert_tensors_.size()=" << expert_tensors_.size()
+              << " config_.use_imatrix=" << config_.use_imatrix << "\n";
     if (imatrix_seeded_ || expert_tensors_.empty()) {
         return 0;
     }

@@ -1,5 +1,5 @@
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 4c10e4126..e4d105604 100644
+index 4c10e4126..bb9984d47 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1,5 +1,9 @@
@@ -12,7 +12,7 @@ index 4c10e4126..e4d105604 100644
  #include "llama-arch.h"
  #include "llama-ext.h"
  #include "llama-hparams.h"
-@@ -1644,6 +1648,59 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1644,6 +1648,71 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
          }
      }
  
@@ -58,36 +58,44 @@ index 4c10e4126..e4d105604 100644
 +                            __func__, name, e->num_experts_in_tensor, num_experts, nb);
 +                    continue;
 +                }
-+                hook->register_expert_tensor(name, e->layer_idx, e->file_offset, nb, num_experts, t->data);
++                // MXFP4 (microscaling FP4) stores each expert's weights with
++                // block scales in a layout our flat per-expert slab copy does
++                // not reproduce correctly, which corrupts inference. Leave
++                // such tensors on ggml's normal mmap (correct, just not
++                // streamed) until the slice layout is supported.
++                if (t->type == GGML_TYPE_MXFP4) {
++                    fprintf(stderr, "%s: guanaco skipping '%s' (type=MXFP4) - streaming unsupported for this quant; using mmap\n",
++                            __func__, name);
++                    continue;
++                }
++                static bool guanaco_dbg = true;
++                hook->register_expert_tensor(name, e->layer_idx, e->file_offset, nb, num_experts);
++                t->data   = hook->get_expert_tensor_data(name);
++                t->buffer = nullptr;
 +            }
 +        }
-+        // The actual t->data redirect is deferred to on_tensors_loaded()
-+        // (called after this function returns) so that CPU_REPACK and any
-+        // other tensor-data transformations complete against the original
-+        // buffer first.  If we redirected here, CPU_REPACK would read from
-+        // the (empty) slab and produce garbage interleaved weights.
++        // All expert tensors registered: seed hot-expert pinning from a
++        // sibling imatrix prior (if present) and pin the calibration-hot
++        // experts so they are resident before the first token is processed.
++        hook->on_expert_tensors_registered();
 +    }
 +#endif
 +
      if (use_mmap_buffer) {
          for (auto & mapping : ml.mappings) {
              pimpl->mappings.emplace_back(std::move(mapping));
-@@ -2329,6 +2386,14 @@ llama_model_params llama_model_default_params() {
+@@ -2329,6 +2398,10 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
 +#ifdef GUANACO_ENABLED
 +        /*.use_guanaco_streaming       =*/ false,
 +        /*.guanaco_max_experts         =*/ -1,
-+        /*.guanaco_io_uring            =*/ true,
-+        /*.guanaco_pilot               =*/ true,
-+        /*.guanaco_pilot_mass          =*/ 0.9f,
-+        /*.guanaco_imatrix             =*/ true,
 +#endif
      };
  
      return result;
-@@ -2740,6 +2805,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
+@@ -2740,6 +2813,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
      TENSOR_SKIP           (llama_model_loader::TENSOR_SKIP),
      TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL) {}
  

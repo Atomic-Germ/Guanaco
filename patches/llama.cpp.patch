@@ -1,5 +1,5 @@
 diff --git a/src/llama.cpp b/src/llama.cpp
-index 0de6048f2..aaf31008d 100644
+index 0de6048f2..cb7825430 100644
 --- a/src/llama.cpp
 +++ b/src/llama.cpp
 @@ -10,6 +10,19 @@
@@ -22,7 +22,7 @@ index 0de6048f2..aaf31008d 100644
  #include "ggml.h"
  #include "ggml-cpp.h"
  #include "ggml-backend.h"
-@@ -327,10 +340,35 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
+@@ -327,10 +340,39 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
              return {0, model_ptr.release()};
          }
  
@@ -51,6 +51,10 @@ index 0de6048f2..aaf31008d 100644
  
 +#ifdef GUANACO_ENABLED
 +        if (model->guanaco_hook != nullptr) {
++            // Called after load_tensors() completes so CPU_REPACK and all
++            // tensor-data transformations have finished. Seeds hot-expert pins
++            // from a sibling imatrix prior and performs the cold-start pin pass.
++            static_cast<guanaco::GuanacoModelHook*>(model->guanaco_hook)->on_tensors_loaded();
 +            static_cast<guanaco::GuanacoModelHook*>(model->guanaco_hook)->advise_random_access(&ml);
 +        }
 +#endif
@@ -58,7 +62,7 @@ index 0de6048f2..aaf31008d 100644
          return {0, model_ptr.release()};
      } catch (const std::exception & err) {
          LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
-@@ -427,6 +465,9 @@ struct llama_model * llama_model_load_from_file(
+@@ -427,6 +469,9 @@ struct llama_model * llama_model_load_from_file(
          const char * path_model,
          struct llama_model_params params) {
      std::vector<std::string> splits = {};
@@ -68,7 +72,7 @@ index 0de6048f2..aaf31008d 100644
      return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, /*file*/ nullptr, params);
  }
  
-@@ -579,3 +620,17 @@ const char * llama_print_system_info(void) {
+@@ -579,3 +624,17 @@ const char * llama_print_system_info(void) {
      return s.c_str();
  }
  
