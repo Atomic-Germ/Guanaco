@@ -12,7 +12,10 @@ experts pinned in RAM and streams the rest from NVMe on demand**, so a model
 that would never fit in system memory runs anyway — bounded by a knob you
 control, not by the file size.
 
-Dense (non-MoE) models are untouched: Guanaco detects no expert tensors and
+<img width="2880" height="1854" alt="image" src="https://github.com/user-attachments/assets/65311726-6a53-4cb8-abcc-5725d447269d" />
+Test system is a Framework 13 AMD Ryzen 340 AI with 48GB of total ram/vram shared, 6 cores on the cpu. OS is Fedora 45 Rawhide, kernel 7.2. Both models; Qwen3.5 122B A10B and Qwen3.6 35B A3B are running concurrently on that system. Ram use is largely context, and the gpu is unused for now.
+
+Dense (non-MoE) models are untouched currently (maybe forever: Guanaco detects no expert tensors and
 does nothing.
 
 ## Build
