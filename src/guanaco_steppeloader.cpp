@@ -1148,10 +1148,6 @@ void SteppeLoader::log_pin_rate() {
 }
 
 void SteppeLoader::log_final_summary() {
-    // Only emit after real work; the hook is also destroyed transiently
-    // during model-fit before any expert runs, which would print noise.
-    if (prefetch_calls_ == 0) return;
-
     const uint64_t total = pin_hits_ + warm_hits_ + disk_miss_;
     const uint64_t resident = pin_hits_ + warm_hits_;
     const int pct = total ? (int)(100ULL * resident / total) : 0;
