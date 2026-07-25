@@ -20,6 +20,16 @@ std::vector<ExpertManifestEntry> parse_gguf_expert_manifest(const char* gguf_pat
     
     manifest.reserve(n_tensors);
 
+    // First pass: detect Gemma-style MoE (inp_gate = router tensor)
+    bool gemma_moe = false;
+    for (int64_t i = 0; i < n_tensors; ++i) {
+        const char* name = gguf_get_tensor_name(ctx, i);
+        if (name && strstr(name, "inp_gate")) {
+            gemma_moe = true;
+            break;
+        }
+    }
+
     for (int64_t i = 0; i < n_tensors; ++i) {
         const char* name = gguf_get_tensor_name(ctx, i);
         if (!name) continue;
@@ -38,7 +48,10 @@ std::vector<ExpertManifestEntry> parse_gguf_expert_manifest(const char* gguf_pat
             name_str.find("ffn_down_exps") != std::string::npos ||
             name_str.find("ffn_gate_exps") != std::string::npos ||
             name_str.find(".experts.") != std::string::npos ||
-            name_str.find(".exps.") != std::string::npos) {
+            name_str.find(".exps.") != std::string::npos ||
+            (gemma_moe && (name_str.find("ffn_up.weight") != std::string::npos ||
+                           name_str.find("ffn_down.weight") != std::string::npos ||
+                           name_str.find("ffn_gate.weight") != std::string::npos))) {
             
             is_expert_tensor = true;
             
@@ -60,6 +73,14 @@ std::vector<ExpertManifestEntry> parse_gguf_expert_manifest(const char* gguf_pat
             }
             
             num_experts_in_tensor = 1;
+            // Fused expert tensors have the expert count in the trailing dim
+            const int64_t* ne = gguf_get_tensor_ne(ctx, i);
+            for (int d = GGML_MAX_DIMS - 1; d >= 0; --d) {
+                if (ne && ne[d] > 1) {
+                    num_experts_in_tensor = (int)ne[d];
+                    break;
+                }
+            }
         }
 
         if (is_expert_tensor && layer_idx >= 0) {

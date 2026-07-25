@@ -49,6 +49,10 @@ bool SteppeLoader::initialize() {
     // can disable streaming for dense models before scanning the manifest.
     parse_gguf_metadata();
 
+    // Reset enabled in case a prior model load (e.g. model-fit transient)
+    // left it disabled. This SteppeLoader is fresh for this model.
+    enabled_ = true;
+
     if (!parse_gguf_manifest()) {
         return false;
     }
@@ -199,6 +203,11 @@ bool SteppeLoader::parse_gguf_manifest() {
     std::vector<std::string> shards = build_shard_paths(config_.gguf_path);
 
     const int model_experts = model_config_.num_experts;
+
+    // Gemma 4 E4B models use blk.N.ffn_gate.weight naming (no _exps suffix).
+    // Detect by architecture name (set from GGUF metadata by parse_gguf_metadata).
+    bool gemma_moe = model_config_.architecture.find("gemma") != std::string::npos;
+
     for (const auto& shard : shards) {
         struct gguf_context* ctx = read_gguf_metadata_ctx(shard);
         if (!ctx) continue;
@@ -235,7 +244,11 @@ bool SteppeLoader::parse_gguf_manifest() {
                 name_str.find("ffn_down_exps") != std::string::npos ||
                 name_str.find("ffn_gate_exps") != std::string::npos ||
                 name_str.find(".experts.") != std::string::npos ||
-                name_str.find(".exps.") != std::string::npos) {
+                name_str.find(".exps.") != std::string::npos ||
+                (gemma_moe && name_str.find("inp_gate") == std::string::npos && (
+                    name_str.find(".ffn_up.weight") != std::string::npos ||
+                    name_str.find(".ffn_down.weight") != std::string::npos ||
+                    name_str.find(".ffn_gate.weight") != std::string::npos))) {
 
                 const char* layer_marker = strstr(name, "blk.");
                 if (!layer_marker) layer_marker = strstr(name, "layers.");
@@ -500,7 +513,13 @@ bool SteppeLoader::parse_gguf_metadata() {
     // Dense model (or expert count unknown): there is nothing to stream.
     // Disable streaming so we never mistake a dense FFN tensor for a 1-expert
     // block and thrash / corrupt the run. ggml's normal mmap is used instead.
-    if (model_config_.num_experts <= 1) {
+    // Also enable when the manifest detected fused expert tensors even if the
+    // metadata key is absent (e.g. Gemma 4 E4B which uses a non-standard key).
+    bool has_fused_from_manifest = false;
+    for (const auto& e : manifest_) {
+        if (e.num_experts_in_tensor > 1) { has_fused_from_manifest = true; break; }
+    }
+    if (model_config_.num_experts <= 1 && !has_fused_from_manifest) {
         enabled_ = false;
         std::cerr << "[Guanaco Storage] No MoE experts detected (experts="
                   << model_config_.num_experts << ") - disabling Guanaco disk streaming (passthrough)\n";
