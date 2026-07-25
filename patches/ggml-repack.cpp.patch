@@ -1,0 +1,45 @@
+diff --git a/ggml/src/ggml-cpu/repack.cpp b/ggml/src/ggml-cpu/repack.cpp
+index f18758f16..1cd9c551d 100644
+--- a/ggml/src/ggml-cpu/repack.cpp
++++ b/ggml/src/ggml-cpu/repack.cpp
+@@ -4570,6 +4570,13 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
+     static const ggml::cpu::repack::tensor_traits<block_q2_K, 1, 16, GGML_TYPE_Q8_K> q2_K_16x1_q8_K;
+ #endif
+ 
++    // Fused expert tensors (e.g. blk.N.ffn_up_exps.weight) must not be
++    // repacked because the row-interleave crosses expert boundaries, which
++    // corrupts MUL_MAT_ID's per-expert slice selection.
++    if (ggml_get_name(cur) && strstr(ggml_get_name(cur), "exps.weight")) {
++        return nullptr;
++    }
++
+     if (cur->type == GGML_TYPE_Q4_0) {
+         if (ggml_cpu_has_avx2() || (ggml_cpu_has_sve() && ggml_cpu_has_matmul_int8() && ggml_cpu_get_sve_cnt() == QK8_0)) {
+             if (cur->ne[1] % 8 == 0) {
+@@ -4834,3 +4841,26 @@ ggml_backend_buffer_type_t ggml_backend_cpu_repack_buffer_type(void) {
+ 
+     return &ggml_backend_cpu_buffer_type_repack;
+ }
++
++// Guanaco: repack raw GGUF tensor bytes into the CPU backend's blocked layout.
++// Mirrors ggml_backend_cpu_repack_buffer_set_tensor but operates on caller
++// provided src/dst buffers so it can be driven outside of a backend buffer
++// (e.g. offline sidecar generation, or streaming a single expert slice).
++GGML_BACKEND_API int ggml_backend_cpu_repack_tensor(struct ggml_tensor * t,
++                                                    const void * src, void * dst) {
++    if (t == nullptr || src == nullptr || dst == nullptr) {
++        return -1;
++    }
++    auto * traits = static_cast<ggml::cpu::repack::tensor_traits_base *>(
++        const_cast<ggml::cpu::tensor_traits *>(ggml_repack_get_optimal_repack_type(t)));
++    if (traits == nullptr) {
++        return -1;  // no repack for this type
++    }
++    const size_t size = ggml_nbytes(t);
++    // The repack functions write into t->data, so point it at dst transiently.
++    void * saved = t->data;
++    t->data = dst;
++    int rc = traits->repack(t, src, size);
++    t->data = saved;
++    return rc;
++}
