@@ -57,6 +57,27 @@ bool SteppeLoader::initialize() {
         return false;
     }
 
+    std::cerr << "[Guanaco Storage] Model config: " << model_config_.architecture 
+              << ", experts=" << model_config_.num_experts 
+              << ", top_k=" << model_config_.num_experts_per_tok
+              << ", layers=" << model_config_.num_hidden_layers
+              << ", hidden=" << model_config_.hidden_size << std::endl;
+
+    // Dense model (or expert count unknown): there is nothing to stream.
+    // Disable streaming so we never mistake a dense FFN tensor for a 1-expert
+    // block and thrash / corrupt the run. ggml's normal mmap is used instead.
+    // Also enable when the manifest detected fused expert tensors even if the
+    // metadata key is absent (e.g. Gemma 4 E4B which uses a non-standard key).
+    bool has_fused_from_manifest = false;
+    for (const auto& e : manifest_) {
+        if (e.num_experts_in_tensor > 1) { has_fused_from_manifest = true; break; }
+    }
+    if (model_config_.num_experts <= 1 && !has_fused_from_manifest) {
+        enabled_ = false;
+        std::cerr << "[Guanaco Storage] No MoE experts detected (experts="
+                  << model_config_.num_experts << ") - disabling Guanaco disk streaming (passthrough)\n";
+    }
+
     return true;
 }
 
@@ -188,7 +209,6 @@ static struct gguf_context* read_gguf_metadata_ctx(const std::string& shard) {
 
 bool SteppeLoader::parse_gguf_manifest() {
     // Dense model: nothing to stream. Skip the whole scan (and avoid emitting
-    // the misleading "Parsed N expert tensors" line for a non-MoE model).
     if (!enabled_) {
         std::cerr << "[Guanaco Storage] Skipping expert manifest (streaming disabled)\n";
         return true;
@@ -268,6 +288,12 @@ bool SteppeLoader::parse_gguf_manifest() {
                 }
 
                 tensor_type = (name_str.find("gate") != std::string::npos) ? 2 : 0;
+                // Gemma-style tensors store experts implicitly (not in a trailing
+                // dimension). Override the dimension-based expert count with the
+                // metadata value so the consistency check below passes.
+                if (gemma_moe && model_config_.num_experts > 0) {
+                    num_experts_in_tensor = model_config_.num_experts;
+                }
             }
 
             // Only treat a tensor as a real MoE expert block if its trailing
@@ -481,6 +507,26 @@ bool SteppeLoader::parse_gguf_metadata() {
     }
 
     gguf_free(ctx);
+
+    // Gemma 4 MoE (E4B) doesn't set gguf.expert_count in metadata.
+    // Detect by scanning tensor names for the router tensor inp_gate.
+    // When found, set num_experts = 4 (all Gemma 4 MoE models have 4 experts).
+    if (model_config_.num_experts == 0 &&
+        model_config_.architecture.find("gemma") != std::string::npos) {
+        struct gguf_context* gctx = gguf_init_from_file(config_.gguf_path.c_str(), params);
+        if (gctx) {
+            int64_t n_t = gguf_get_n_tensors(gctx);
+            for (int64_t i = 0; i < n_t; ++i) {
+                const char* tn = gguf_get_tensor_name(gctx, i);
+                if (tn && strstr(tn, "inp_gate")) {
+                    model_config_.num_experts = 4;
+                    model_config_.num_experts_per_tok = 2;
+                    break;
+                }
+            }
+            gguf_free(gctx);
+        }
+    }
     
     // Fallback: infer from manifest if metadata not found
     if (model_config_.num_experts == 0) {
@@ -502,27 +548,6 @@ bool SteppeLoader::parse_gguf_metadata() {
     
     if (model_config_.num_hidden_layers == 0 && !layer_experts_.empty()) {
         model_config_.num_hidden_layers = layer_experts_.size();
-    }
-
-    std::cerr << "[Guanaco Storage] Model config: " << model_config_.architecture 
-              << ", experts=" << model_config_.num_experts 
-              << ", top_k=" << model_config_.num_experts_per_tok
-              << ", layers=" << model_config_.num_hidden_layers
-              << ", hidden=" << model_config_.hidden_size << std::endl;
-
-    // Dense model (or expert count unknown): there is nothing to stream.
-    // Disable streaming so we never mistake a dense FFN tensor for a 1-expert
-    // block and thrash / corrupt the run. ggml's normal mmap is used instead.
-    // Also enable when the manifest detected fused expert tensors even if the
-    // metadata key is absent (e.g. Gemma 4 E4B which uses a non-standard key).
-    bool has_fused_from_manifest = false;
-    for (const auto& e : manifest_) {
-        if (e.num_experts_in_tensor > 1) { has_fused_from_manifest = true; break; }
-    }
-    if (model_config_.num_experts <= 1 && !has_fused_from_manifest) {
-        enabled_ = false;
-        std::cerr << "[Guanaco Storage] No MoE experts detected (experts="
-                  << model_config_.num_experts << ") - disabling Guanaco disk streaming (passthrough)\n";
     }
 
     return true;
