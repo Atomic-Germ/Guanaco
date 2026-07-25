@@ -64,6 +64,16 @@ struct GUANACO_API GuanacoModelHook {
     
     // Apply MADV_RANDOM to expert regions
     virtual void advise_random_access(void* ml) = 0;
+
+    // Expert-affinity warmup: when a recorder is attached, on_router_computed
+    // appends (layer, expert_ids) instead of driving prefetch. The caller
+    // retrieves the recordings after each forward pass, pairs draft+target,
+    // and feeds them to the affinity collector.
+    struct RouterRecord {
+        int layer;
+        std::vector<int> expert_ids;
+    };
+    virtual void set_router_recorder(std::vector<RouterRecord>* recorder) = 0;
 };
 
 // Factory function to create a model hook

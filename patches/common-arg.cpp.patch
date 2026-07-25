@@ -1,5 +1,5 @@
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 8a74e5f2b..5d045def5 100644
+index 8a74e5f2b..74742de3a 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -384,7 +384,8 @@ common_models_handler common_models_handler_init(const common_params & params, l
@@ -24,7 +24,7 @@ index 8a74e5f2b..5d045def5 100644
      if (!plan.preset.local_path.empty()) {
          tasks.emplace_back(plan.preset, opts, [&]() {
              // if HF repo is a preset repo, we simply run server in router mode with the preset.ini file
-@@ -2448,6 +2454,55 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2448,6 +2454,66 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.use_mmap = value;
          }
      ).set_env("LLAMA_ARG_MMAP"));
@@ -77,6 +77,17 @@ index 8a74e5f2b..5d045def5 100644
 +            params.guanaco_imatrix = value;
 +        }
 +    ).set_env("LLAMA_ARG_GUANACO_IMATRIX"));
++    add_opt(common_arg(
++        {"-ga", "--guanaco-affinity"}, "TEXT",
++        "expert-affinity warmup prompt for speculative decoding. "
++        "If set, runs the given text through draft+target at startup "
++        "to learn draft-expert to target-expert correlations, then "
++        "prefetches target experts predicted by the draft during inference. "
++        "(default: disabled)",
++        [](common_params & params, const std::string & value) {
++            params.guanaco_affinity = value;
++        }
++    ).set_env("LLAMA_ARG_GUANACO_AFFINITY"));
      add_opt(common_arg(
          {"-dio", "--direct-io"},
          {"-ndio", "--no-direct-io"},

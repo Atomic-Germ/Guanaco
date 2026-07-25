@@ -24,6 +24,9 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
     // pairs each name with the slab pointer so llama.cpp can redirect t->data
     // AFTER CPU_REPACK completes (avoiding the repack reading empty slab data).
     std::vector<std::string> registered_tensors_;
+    // Router recorder for expert-affinity warmup. When non-null,
+    // on_router_computed appends here instead of driving prefetch.
+    std::vector<RouterRecord>* router_recorder_ = nullptr;
 
     GuanacoModelHookImpl(const char* path, const SteppeLoaderConfig& config)
         : model_path(path ? path : "") {
@@ -64,7 +67,15 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
     }
 
     void on_router_computed(int layer_idx, const int* expert_ids, int n) override {
-        if (!loader || expert_ids == nullptr || n <= 0) return;
+        if (expert_ids == nullptr || n <= 0) return;
+        if (router_recorder_) {
+            RouterRecord rec;
+            rec.layer = layer_idx;
+            rec.expert_ids.assign(expert_ids, expert_ids + n);
+            router_recorder_->push_back(std::move(rec));
+            return;
+        }
+        if (!loader) return;
         loader->record_routing(layer_idx, expert_ids, n);
         loader->prefetch_experts(layer_idx, expert_ids, n);
         loader->pilot_prefetch_next_layer(layer_idx, expert_ids, n);
@@ -75,6 +86,10 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
         if (loader) {
             loader->advise_experts_random();
         }
+    }
+
+    void set_router_recorder(std::vector<RouterRecord>* recorder) override {
+        router_recorder_ = recorder;
     }
 
     // Called once all expert tensors are registered: seed hot-expert
