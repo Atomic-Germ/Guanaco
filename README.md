@@ -13,7 +13,7 @@ that would never fit in system memory runs anyway — bounded by a knob you
 control, not by the file size.
 
 <img width="2880" height="1854" alt="image" src="https://github.com/user-attachments/assets/65311726-6a53-4cb8-abcc-5725d447269d" />
-Test system is a Framework 13 AMD Ryzen 340 AI with 48GB of total ram/vram shared, 6 cores on the cpu. OS is Fedora 45 Rawhide, kernel 7.2. Both models; Qwen3.5 122B A10B and Qwen3.6 35B A3B are running concurrently on that system. Ram use is largely context, and the gpu is unused for now.
+Test system is a Framework 13 AMD Ryzen 340 AI with 48GB of total ram/vram shared, 6 cores on the cpu. OS is Fedora 45 Rawhide, kernel 7.2. Both models; Qwen3.5 122B A10B and Qwen3.6 35B A3B are running concurrently on that system. Ram use is largely context, and the gpu is unused for now. Example is built against llama.cpp build 10068.
 
 Dense (non-MoE) models are untouched currently (maybe forever: Guanaco detects no expert tensors and
 does nothing.
@@ -138,3 +138,15 @@ prefix. The lines worth watching:
   the `--guanaco-streaming` flag and hook will be absent.
 - **Sharded GGUFs** (e.g. `-0000N-of-0000M.gguf`) are supported; the manifest
   is parsed per shard and the imatrix lookup tolerates the shard suffix.
+- **ROCm Has No Benefit** All tests have shown ROCm to be as slow or slower
+  than CPU using these methods. If the model fits entirely in ram, forego
+  Guanaco.
+
+### Tested Models (On Ryzen AI 340 CPU)
+
+- **jamiefutch/Qwen3.5-122B-A10B-MXFP4_MOE-MTP-GGUF** ~3-7tk/s Generation ~6000 tokens @ 5GB (CPU)
+- **noctrex/Qwen3.6-35B-A3B-MTP-MXFP4_MOE-GGUF** ~7-10tk/s Generation @ 10.4GB (CPU)
+- **FreedomAISVR/Qwen3.6-35B-A3B-Claude-4.7-Distill-MXFP4-MOE-GGUF** ~3-4tk/s Generation @ 10GB (CPU)
+- **FreedomAISVR/Nemotron-3-30B-Nano-Omni-MXFP4-MOE-GGUF** ~12-15tk/s Generation @ 12GB (CPU)
+- ***exdysa/MiniMax-M2.5-REAP-139B-A10B-GGUF-MXFP4_MOE*** Loads, but painfully slow; would benefit from spec decoding <0.2tk/s
+- 
