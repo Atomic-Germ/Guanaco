@@ -1318,7 +1318,7 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
         layer < (int)affinity_table_->layers.size()) {
         int predicted[256];
         int n_pred = expert_affinity_lookup(*affinity_table_, layer, expert_ids, n,
-                                            predicted, affinity_table_->threshold);
+                                            predicted, 256, affinity_table_->threshold);
         if (n_pred > 0) {
             std::unordered_set<int> dedup(predicted, predicted + n_pred);
             for (auto& kv : expert_tensors_) {

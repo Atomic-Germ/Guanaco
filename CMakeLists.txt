@@ -81,16 +81,19 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/../llama.cpp llama.cpp)
 
 # Add guanaco include path so llama.cpp can find guanaco/guanaco.h when patched
 target_include_directories(llama PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(server-context PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 # libllama references guanaco streaming symbols (via GUANACO_ENABLED patches),
 # so it must record a DT_NEEDED on libguanaco. Circular with guanaco->llama is
 # fine for shared libraries (both resolve symbols at load time).
-target_link_libraries(llama PRIVATE guanaco)
+target_link_libraries(llama PUBLIC guanaco)
+target_link_libraries(server-context PUBLIC guanaco)
 
 # === Guanaco library ===
 add_library(guanaco
     src/guanaco_manifest.cpp
     src/guanaco_steppeloader.cpp
+    src/guanaco_affinity.cpp
     src/guanaco_herdcache.cpp
     src/guanaco_router.cpp
     src/guanaco_executor.cpp

@@ -130,9 +130,10 @@ std::unique_ptr<ExpertAffinityTable> ExpertAffinityCollector::finalize(float thr
 int expert_affinity_lookup(const ExpertAffinityTable& table,
                            int draft_layer,
                            const int* draft_ids, int n_draft,
-                           int* out, float threshold)
+                           int* out, int out_capacity, float threshold)
 {
     if (draft_layer < 0 || draft_layer >= (int)table.layers.size()) return 0;
+    if (out_capacity <= 0) return 0;
     if (threshold < 0) threshold = table.threshold;
 
     const auto& layer = table.layers[draft_layer];
@@ -145,6 +146,7 @@ int expert_affinity_lookup(const ExpertAffinityTable& table,
         uint32_t end   = layer.ranges[d + 1];
         for (uint32_t ei = begin; ei < end; ++ei) {
             if (layer.entries[ei].probability < threshold) break;
+            if (written >= out_capacity) return written;
             out[written++] = layer.entries[ei].target_expert;
         }
     }

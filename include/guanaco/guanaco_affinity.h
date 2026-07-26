@@ -80,6 +80,7 @@ private:
 GUANACO_API int expert_affinity_lookup(const ExpertAffinityTable& table,
                                        int draft_layer,
                                        const int* draft_ids, int n_draft,
-                                       int* out, float threshold = 0.05f);
+                                       int* out, int out_capacity,
+                                       float threshold = 0.05f);
 
 } // namespace guanaco
