@@ -92,6 +92,12 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
         router_recorder_ = recorder;
     }
 
+    void set_affinity_table(const ExpertAffinityTable* table) override {
+        if (loader) {
+            loader->set_affinity_table(table);
+        }
+    }
+
     // Called once all expert tensors are registered: seed hot-expert
     // pinning from a sibling imatrix prior (if present), then pin the
     // calibration-hot experts so they are resident before token 0.

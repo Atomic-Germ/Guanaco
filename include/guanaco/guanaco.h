@@ -12,6 +12,8 @@
 struct ggml_backend_buffer;
 typedef struct ggml_backend_buffer* ggml_backend_buffer_t;
 
+namespace guanaco { struct ExpertAffinityTable; }
+
 #ifdef _WIN32
     #ifdef GUANACO_EXPORTS
         #define GUANACO_API __declspec(dllexport)
@@ -172,6 +174,8 @@ public:
     const std::vector<ExpertManifestEntry>& get_manifest() const { return manifest_; }
     const MoEModelConfig& get_model_config() const { return model_config_; }
     
+    void set_affinity_table(const struct ExpertAffinityTable* table) { affinity_table_ = table; }
+    
     std::future<void> prefetch_expert(int layer_idx, int expert_idx, 
                                        std::shared_ptr<ExpertTensorBuffer> target_buf);
     
@@ -193,6 +197,7 @@ private:
     // below becomes a no-op, so ggml uses its normal mmap and the model just
     // runs. This prevents mis-parsing a dense FFN tensor as a 1-"expert" block.
     bool enabled_ = true;
+    const struct ExpertAffinityTable* affinity_table_ = nullptr;
 
 #ifdef GUANACO_HAVE_IO_URING
     void* uring_slab_ = nullptr;  // batched io_uring reader for slab prefetch

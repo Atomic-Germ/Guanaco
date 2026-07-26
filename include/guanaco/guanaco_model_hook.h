@@ -18,6 +18,9 @@
 
 #include "guanaco/guanaco.h"
 
+// Forward declarations
+struct ExpertAffinityTable;
+
 // Forward declarations for llama.cpp types
 struct llama_model_loader;
 struct llama_model;
@@ -74,6 +77,11 @@ struct GUANACO_API GuanacoModelHook {
         std::vector<int> expert_ids;
     };
     virtual void set_router_recorder(std::vector<RouterRecord>* recorder) = 0;
+
+    // Install the correlation table built during warmup. When set, the draft
+    // model's prefetch_experts() also prefetches target expert slices predicted
+    // by the table.
+    virtual void set_affinity_table(const struct ExpertAffinityTable* table) = 0;
 };
 
 // Factory function to create a model hook

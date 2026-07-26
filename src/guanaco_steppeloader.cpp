@@ -1,4 +1,5 @@
 #include "guanaco/guanaco.h"
+#include "guanaco/guanaco_affinity.h"
 #include "gguf.h"
 #include "ggml-backend.h"
 #include <cstring>
@@ -1308,6 +1309,30 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
         // Do NOT evict here - the slices we just made resident are needed by
         // the mul_mat_id node that runs immediately after this callback returns.
         // Periodic eviction is handled by maybe_pin_hot_experts()/evict_to_budget.
+    }
+
+    // Expert-affinity speculative prefetch: if a correlation table is installed
+    // (from warmup), predict which target experts the current draft selection
+    // will lead to and pre-resident them ahead of time.
+    if (affinity_table_ && !affinity_table_->layers.empty() &&
+        layer < (int)affinity_table_->layers.size()) {
+        int predicted[256];
+        int n_pred = expert_affinity_lookup(*affinity_table_, layer, expert_ids, n,
+                                            predicted, affinity_table_->threshold);
+        if (n_pred > 0) {
+            std::unordered_set<int> dedup(predicted, predicted + n_pred);
+            for (auto& kv : expert_tensors_) {
+                ExpertTensor& t = kv.second;
+                if (t.layer != layer || t.mmap_base == nullptr || t.per_expert_bytes == 0) continue;
+                for (int id : dedup) {
+                    if (id < 0 || id >= t.num_experts) continue;
+                    if (t.pinned[id] || t.loaded[id]) continue;
+                    void* addr = static_cast<char*>(t.mmap_base) + (size_t)id * t.per_expert_bytes;
+                    madvise(addr, t.per_expert_bytes, MADV_WILLNEED);
+                    t.loaded[id] = true;
+                }
+            }
+        }
     }
 }
 
