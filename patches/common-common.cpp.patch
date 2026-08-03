@@ -1,11 +1,21 @@
 diff --git a/common/common.cpp b/common/common.cpp
-index ff27d392f..42a7226e7 100644
+index ff27d392f..ab2e0cc35 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -1600,6 +1600,13 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
+@@ -1418,7 +1418,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
+         common_set_adapter_lora(lctx, params.lora_adapters);
+     }
+ 
+-    if (params.warmup) {
++    if (params.warmup && params.load_mode != LLAMA_LOAD_MODE_STREAMING) {
+         COM_TRC("%s", "warming up the model with an empty run - please wait ... (--no-warmup to disable)\n");
+ 
+         std::vector<llama_token> tmp;
+@@ -1600,7 +1600,16 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
      mparams.load_mode       = params.load_mode;
      mparams.tensor_split    = params.tensor_split;
      mparams.check_tensors   = params.check_tensors;
+-    mparams.use_extra_bufts = !params.no_extra_bufts;
 +#ifdef GUANACO_ENABLED
 +    mparams.guanaco_max_experts   = params.guanaco_max_experts;
 +    mparams.guanaco_io_uring      = params.guanaco_io_uring;
@@ -13,6 +23,9 @@ index ff27d392f..42a7226e7 100644
 +    mparams.guanaco_pilot_mass    = params.guanaco_pilot_mass;
 +    mparams.guanaco_imatrix       = params.guanaco_imatrix;
 +#endif
-     mparams.use_extra_bufts = !params.no_extra_bufts;
++    // Streaming mode must not repack: the CPU_REPACK pass copies every weight
++    // into RAM, defeating disk streaming. --no-repack is implied.
++    mparams.use_extra_bufts = !params.no_extra_bufts && params.load_mode != LLAMA_LOAD_MODE_STREAMING;
      mparams.no_host         = params.no_host;
  
+     if (params.kv_overrides.empty()) {

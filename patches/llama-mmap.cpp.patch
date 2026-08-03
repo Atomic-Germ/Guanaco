@@ -1,0 +1,15 @@
+diff --git a/src/llama-mmap.cpp b/src/llama-mmap.cpp
+index ed572da7f..8fc4dcc36 100644
+--- a/src/llama-mmap.cpp
++++ b/src/llama-mmap.cpp
+@@ -448,7 +448,9 @@ struct llama_mmap::impl {
+         int flags = MAP_SHARED;
+         if (numa) { prefetch = 0; }
+ #ifdef __linux__
+-        if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
++        // guanaco streaming (prefetch=0) skips the sequential-readahead hint
++        // too: otherwise the first header fault cascades into a full-file read.
++        if (prefetch != 0 && posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
+             LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_SEQUENTIAL) failed: %s\n",
+                     strerror(errno));
+         }

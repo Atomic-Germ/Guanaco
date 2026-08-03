@@ -1,5 +1,5 @@
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index e93641b63..47957748b 100644
+index e93641b63..fccb162a7 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1,5 +1,9 @@
@@ -12,7 +12,18 @@ index e93641b63..47957748b 100644
  #include "llama-arch.h"
  #include "llama-ext.h"
  #include "llama-hparams.h"
-@@ -1655,6 +1659,71 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1526,7 +1530,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+         }
+     }
+ 
+-    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
++    // guanaco streaming: skip the MAP_POPULATE prefault so load stays
++    // RAM-bounded; pages are faulted in on first use instead.
++    ml.init_mappings(this->guanaco_hook == nullptr, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+     pimpl->mappings.reserve(ml.mappings.size());
+ 
+     // create the backend buffers
+@@ -1655,6 +1661,71 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
          }
      }
  
@@ -84,8 +95,12 @@ index e93641b63..47957748b 100644
      if (use_mmap_buffer) {
          for (auto & mapping : ml.mappings) {
              pimpl->mappings.emplace_back(std::move(mapping));
-@@ -2442,6 +2511,9 @@ llama_model_params llama_model_default_params() {
-         /*.use_extra_bufts             =*/ true,
+@@ -2439,9 +2510,12 @@ llama_model_params llama_model_default_params() {
+         /*.kv_overrides                =*/ nullptr,
+         /*.vocab_only                  =*/ false,
+         /*.check_tensors               =*/ false,
+-        /*.use_extra_bufts             =*/ true,
++        /*.use_extra_bufts             =*/ false,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
 +#ifdef GUANACO_ENABLED
@@ -94,7 +109,7 @@ index e93641b63..47957748b 100644
          /*.load_mtp                    =*/ false,
      };
  
-@@ -2860,6 +2932,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
+@@ -2860,6 +2934,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
      TENSOR_SKIP           (llama_model_loader::TENSOR_SKIP),
      TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL) {}
  
