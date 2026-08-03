@@ -139,11 +139,107 @@ static std::vector<std::string> build_shard_paths(const std::string& path) {
     return out;
 }
 
+// Compute the byte offset where a GGUF's tensor data begins, i.e. the size of
+// the header + KV section + tensor-info table (aligned up to general.alignment).
+// Walks the buffer without allocating or invoking gguf; returns 0 when the
+// buffer ends before the metadata does (the caller must read more). This lets
+// read_gguf_metadata_ctx read exactly the metadata region, so the subsequent
+// gguf_init_from_buffer always parses a complete buffer and never logs the
+// "failed to read key-value pairs" errors that a grow-and-retry would trigger
+// by design.
+static size_t gguf_metadata_size(const uint8_t * data, size_t size) {
+    size_t off = 0;
+
+    auto need = [&](size_t n) -> const uint8_t * {
+        if (n > size - off) return nullptr;
+        const uint8_t * p = data + off;
+        off += n;
+        return p;
+    };
+    auto rd_u32 = [&]() -> uint64_t { const uint8_t * p = need(4); return p ? (uint64_t) p[0] | (uint64_t) p[1] << 8 | (uint64_t) p[2] << 16 | (uint64_t) p[3] << 24 : 0; };
+    auto rd_u64 = [&]() -> uint64_t {
+        const uint8_t * p = need(8);
+        if (!p) return 0;
+        uint64_t v = 0;
+        for (int i = 0; i < 8; ++i) v |= (uint64_t) p[i] << (8*i);
+        return v;
+    };
+
+    if (need(4) == nullptr) return 0;  // magic
+    const uint64_t version = rd_u32();
+    if (version == 0 || (version & 0xFFFF) == 0) return 0;  // bad / non-native endian
+    const uint64_t n_tensors = rd_u64();
+    const uint64_t n_kv      = rd_u64();
+
+    uint64_t alignment = 32;  // GGUF_DEFAULT_ALIGNMENT
+    for (uint64_t i = 0; i < n_kv; ++i) {
+        const uint64_t key_len = rd_u64();
+        if (key_len > size - off) return 0;
+        const uint8_t * key = need(key_len);
+        if (!key) return 0;
+        const std::string key_str(reinterpret_cast<const char *>(key), key_len);
+
+        const uint64_t type = rd_u32();
+        if (type > 12) return 0;  // unknown GGUF type
+
+        if (type == 9) {  // GGUF_TYPE_ARRAY: element type + count + elements
+            const uint64_t elem_type = rd_u32();
+            const uint64_t n = rd_u64();
+            if (elem_type > 12 || n > (size - off)) return 0;
+            if (elem_type == 8) {  // strings are length-prefixed
+                for (uint64_t j = 0; j < n; ++j) {
+                    const uint64_t len = rd_u64();
+                    if (len > size - off) return 0;
+                    off += len;
+                }
+            } else {
+                const uint64_t elem_size = elem_type == 0 || elem_type == 1 || elem_type == 7 ? 1
+                                         : elem_type == 2 || elem_type == 3 ? 2
+                                         : elem_type == 4 || elem_type == 5 || elem_type == 6 ? 4
+                                         : 8;  // u64/i64/f64
+                if (n > (size - off) / elem_size) return 0;
+                off += n * elem_size;
+            }
+        } else if (type == 8) {  // GGUF_TYPE_STRING
+            const uint64_t len = rd_u64();
+            if (len > size - off) return 0;
+            off += len;
+        } else {
+            const uint64_t v_size = type == 0 || type == 1 || type == 7 ? 1
+                                  : type == 2 || type == 3 ? 2
+                                  : type == 4 || type == 5 || type == 6 ? 4
+                                  : 8;  // u64/i64/f64
+            if (v_size > size - off) return 0;
+            if (key_str == "general.alignment" && type == 4) {  // GGUF_TYPE_UINT32
+                const uint8_t * p = data + off;
+                alignment = (uint64_t) p[0] | (uint64_t) p[1] << 8 | (uint64_t) p[2] << 16 | (uint64_t) p[3] << 24;
+                if (alignment == 0 || (alignment & (alignment - 1)) != 0) return 0;
+            }
+            off += v_size;
+        }
+    }
+
+    for (uint64_t i = 0; i < n_tensors; ++i) {
+        const uint64_t name_len = rd_u64();
+        if (name_len > size - off) return 0;
+        off += name_len;
+
+        const uint64_t n_dims = rd_u32();
+        if (n_dims > 4 || n_dims > (size - off) / 8) return 0;
+        off += n_dims * 8;   // dims (uint64 each)
+        off += 4;            // type (int32)
+        off += 8;            // offset (uint64)
+        if (off > size) return 0;
+    }
+
+    return (off + alignment - 1) & ~(alignment - 1);
+}
+
 // Read only a GGUF shard's metadata (header + KV + tensor-info table) into a
 // small heap buffer and build a gguf_context from it. This deliberately avoids
 // gguf_init_from_file, which mmaps the entire (potentially huge) tensor data
-// blob - we only need tensor names/offsets/dims, so we grow a read buffer until
-// it covers the whole metadata region (gguf_get_data_offset <= buffer size).
+// blob - we only need tensor names/offsets/dims, so we compute the metadata
+// size with a cheap header walk and then read exactly that many bytes.
 // Returns a context the caller must gguf_free, or nullptr on failure.
 static struct gguf_context* read_gguf_metadata_ctx(const std::string& shard) {
     int fd = open(shard.c_str(), O_RDONLY);
@@ -157,25 +253,20 @@ static struct gguf_context* read_gguf_metadata_ctx(const std::string& shard) {
     for (;;) {
         buf.resize(cap);
         ssize_t rd = pread(fd, buf.data(), cap, 0);
-        if (rd < 0 || (size_t)rd < cap) break;
-        struct gguf_init_params params = { false, nullptr };
-        ctx = gguf_init_from_buffer(buf.data(), cap, params);
-        if (!ctx) {
-            // A null return on a valid file means the buffer was too small to
-            // hold the full metadata (gguf aborts the parse rather than
-            // returning a partial ctx). Grow and retry; only give up if we've
-            // hit the cap. This keeps the read metadata-only (no full mmap).
-            if (cap >= max_cap) break;
+        if (rd < 0) break;
+
+        const size_t meta = gguf_metadata_size(buf.data(), (size_t) rd);
+        if (meta == 0 || meta > (size_t) rd) {
+            // metadata not fully buffered (or truncated file) - grow and retry
+            if ((size_t) rd < cap || cap >= max_cap) break;
             cap *= 2;
             continue;
         }
-        // data_offset is the end of the metadata region; if it lies beyond what
-        // we read, the metadata is larger than our buffer - grow and retry.
-        if (gguf_get_data_offset(ctx) <= cap) { ok = true; break; }
-        gguf_free(ctx);
-        ctx = nullptr;
-        if (cap >= max_cap) break;
-        cap *= 2;
+
+        struct gguf_init_params params = { false, nullptr };
+        ctx = gguf_init_from_buffer(buf.data(), meta, params);
+        ok = ctx != nullptr;
+        break;
     }
     close(fd);
     if (!ok && ctx) { gguf_free(ctx); ctx = nullptr; }
