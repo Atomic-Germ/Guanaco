@@ -1,31 +1,8 @@
-From 866543040425581ef6ceb1e16616954f97b89726 Mon Sep 17 00:00:00 2001
-From: Amine Harrak <harrak.amine1987@gmail.com>
-Date: Wed, 22 Jul 2026 15:35:04 +0200
-Subject: [PATCH] server : preserve context checkpoints across slot
- save/restore
-
-The SLOT_RESTORE handler discards the slot's context checkpoints and they
-are not part of the save file, so models that need them for partial cache
-reuse (SWA and hybrid/recurrent memory) always fall back to full prompt
-re-processing after a restore, even when most of the prefix matches.
-
-Append the checkpoints to the slot save file after the llama state payload
-and read them back on restore. Save files without the appendix restore as
-before.
-
-Add a server test covering the path: on a SWA model, a divergent re-prompt
-after save -> slot overwrite -> restore must roll back to a checkpoint
-exactly like a live slot does, instead of re-processing the whole prompt.
----
- tools/server/server-context.cpp           | 110 ++++++++++++++++++++++
- tools/server/tests/unit/test_slot_save.py | 102 +++++++++++++++++++-
- 2 files changed, 209 insertions(+), 3 deletions(-)
-
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 744593c760a3..ea839b274199 100644
+index 4655b518e..9891fdf5b 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -2340,6 +2340,103 @@ struct server_context_impl {
+@@ -2389,6 +2389,103 @@ private:
                  cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
      }
  
@@ -129,7 +106,7 @@ index 744593c760a3..ea839b274199 100644
      void process_single_task(server_task && task) {
          switch (task.type) {
              case SERVER_TASK_TYPE_COMPLETION:
-@@ -2535,6 +2632,12 @@ struct server_context_impl {
+@@ -2584,6 +2681,12 @@ private:
                      const size_t token_count = tokens.size();
                      const size_t nwrite = llama_state_seq_save_file(ctx_tgt, filepath.c_str(), slot->id, tokens.data(), token_count);
  
@@ -142,7 +119,7 @@ index 744593c760a3..ea839b274199 100644
                      const int64_t t_end = ggml_time_us();
                      const double t_save_ms = (t_end - t_start) / 1000.0;
  
-@@ -2581,6 +2684,13 @@ struct server_context_impl {
+@@ -2630,6 +2733,13 @@ private:
                      slot->prompt.clear();
                      slot->prompt.tokens.insert(tokens);
  
@@ -157,7 +134,7 @@ index 744593c760a3..ea839b274199 100644
                      const double t_restore_ms = (t_end - t_start) / 1000.0;
  
 diff --git a/tools/server/tests/unit/test_slot_save.py b/tools/server/tests/unit/test_slot_save.py
-index be22d9859efd..9acf5b8ea839 100644
+index be22d9859..9acf5b8ea 100644
 --- a/tools/server/tests/unit/test_slot_save.py
 +++ b/tools/server/tests/unit/test_slot_save.py
 @@ -160,9 +160,9 @@ def test_slot_save_restore_text_only_on_multimodal(mmproj_server):

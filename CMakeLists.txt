@@ -40,7 +40,7 @@ if(GUANACO_PATCH_LLAMA_CPP)
         get_filename_component(PATCH_NAME ${PATCH} NAME)
         execute_process(
             COMMAND patch -p1 --forward --dry-run -i "${PATCH}"
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/../llama.cpp
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/llama.cpp
             RESULT_VARIABLE PATCH_CHECK
             ERROR_QUIET
             OUTPUT_QUIET
@@ -48,7 +48,7 @@ if(GUANACO_PATCH_LLAMA_CPP)
         if(PATCH_CHECK EQUAL 0)
             execute_process(
                 COMMAND patch -p1 --forward -i "${PATCH}"
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/../llama.cpp
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/llama.cpp
                 RESULT_VARIABLE PATCH_RESULT
             )
             if(PATCH_RESULT EQUAL 0)
@@ -72,12 +72,17 @@ set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER ON  CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_APP    OFF CACHE BOOL "" FORCE)
 
-# Output goes to ${CMAKE_BINARY_DIR}/bin (guanaco/build/bin)
+# The server binary links libllama-server-impl.so; upstream only installs that
+# library when LLAMA_TOOLS_INSTALL is on, so without this `cmake --install`
+# would produce a llama-server that cannot find its own impl library.
+set(LLAMA_TOOLS_INSTALL ON  CACHE BOOL "" FORCE)
+
+# Output goes to ${CMAKE_BINARY_DIR}/bin (build/bin)
 # Set RPATH so tools pick up our patched libllama.so AND libguanaco.so
 # (libguanaco.so is emitted to build/bin via LIBRARY_OUTPUT_DIRECTORY below)
 set(CMAKE_BUILD_RPATH  "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
-add_subdirectory(${CMAKE_SOURCE_DIR}/../llama.cpp llama.cpp)
+add_subdirectory(${CMAKE_SOURCE_DIR}/llama.cpp llama.cpp)
 
 # Add guanaco include path so llama.cpp can find guanaco/guanaco.h when patched
 target_include_directories(llama PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -101,8 +106,8 @@ add_library(guanaco
 
 target_include_directories(guanaco PUBLIC
     ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/../llama.cpp
-    ${CMAKE_SOURCE_DIR}/../llama.cpp/ggml/src
+    ${CMAKE_SOURCE_DIR}/llama.cpp
+    ${CMAKE_SOURCE_DIR}/llama.cpp/ggml/src
 )
 
 # imatrix prior: compile a copy of llama.cpp's imatrix-loader.cpp directly
@@ -111,9 +116,9 @@ target_include_directories(guanaco PUBLIC
 # shim provides the common.h/log.h it includes. We copy the .cpp into the
 # shim dir so its quote-includes ("common.h") resolve to the shim rather
 # than the real common/ next to the original source file.
-target_sources(guanaco PRIVATE ${CMAKE_SOURCE_DIR}/src/imatrix_shim/imatrix-loader.cpp)
+target_sources(guanaco PRIVATE ${CMAKE_SOURCE_DIR}/src/imatrix-loader.cpp)
 target_include_directories(guanaco PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/imatrix_shim
+    ${CMAKE_SOURCE_DIR}/src
 )
 
 target_link_libraries(guanaco PUBLIC

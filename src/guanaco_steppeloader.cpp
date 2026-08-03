@@ -234,6 +234,8 @@ bool SteppeLoader::parse_gguf_manifest() {
             if (name_str.find("ffn_up_exps") != std::string::npos ||
                 name_str.find("ffn_down_exps") != std::string::npos ||
                 name_str.find("ffn_gate_exps") != std::string::npos ||
+                name_str.find("ffn_gate_up_exps") != std::string::npos ||
+                name_str.find("exps.weight") != std::string::npos ||
                 name_str.find(".experts.") != std::string::npos ||
                 name_str.find(".exps.") != std::string::npos) {
 

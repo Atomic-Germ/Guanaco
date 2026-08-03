@@ -1,5 +1,5 @@
 diff --git a/src/llama-model.h b/src/llama-model.h
-index 45b054ced..2ed97e5cf 100644
+index 056a6efa5..a33df39ee 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
 @@ -14,6 +14,11 @@
@@ -14,12 +14,12 @@ index 45b054ced..2ed97e5cf 100644
  struct llama_cparams;
  struct llama_ubatch;
  struct llama_model_loader;
-@@ -706,8 +711,13 @@ struct llama_model_base : public llama_model {
+@@ -720,8 +725,13 @@ struct llama_model_base : public llama_model {
      const int TENSOR_SKIP;
      const int TENSOR_SKIP_IF_VIRTUAL;
  
 +#ifdef GUANACO_ENABLED
-+    // Guanaco disk-streaming hook (created when use_guanaco_streaming is set)
++    // Guanaco disk-streaming hook (created when load_mode is STREAMING)
 +    void* guanaco_hook = nullptr;
 +#endif
 +
