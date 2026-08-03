@@ -1,0 +1,83 @@
+diff --git a/src/llama.cpp b/src/llama.cpp
+index 0de6048f2..cb7825430 100644
+--- a/src/llama.cpp
++++ b/src/llama.cpp
+@@ -10,6 +10,19 @@
+ #include "llama-model-saver.h"
+ #include "llama-model.h"
+ 
++#ifdef GUANACO_ENABLED
++#include "guanaco/guanaco.h"
++#include "guanaco/guanaco_model_hook.h"
++#endif
+ #include "ggml.h"
+ #include "ggml-cpp.h"
+ #include "ggml-backend.h"
+@@ -327,10 +340,39 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
+             return {0, model_ptr.release()};
+         }
+ 
++#ifdef GUANACO_ENABLED
++        // Create the Guanaco hook up front so expert tensors can be
++        // redirected to streaming slabs during load_tensors().
++        if (params.use_guanaco_streaming) {
++            fprintf(stderr, "%s: loading model '%s' with GUANACO disk streaming\n", __func__, fname.c_str());
++            guanaco::SteppeLoaderConfig cfg;
++            cfg.max_active_experts = params.guanaco_max_experts > 0
++                ? (size_t)params.guanaco_max_experts : 8;
++            cfg.use_io_uring  = params.guanaco_io_uring;
++            cfg.use_pilot     = params.guanaco_pilot;
++            cfg.pilot_mass    = params.guanaco_pilot_mass;
++            cfg.use_imatrix   = params.guanaco_imatrix;
++            model->guanaco_hook = guanaco::create_guanaco_model_hook(fname.c_str(), cfg);
++            if (model->guanaco_hook != nullptr) {
++                static_cast<guanaco::GuanacoModelHook*>(model->guanaco_hook)->initialize(&ml, model);
++            }
++        }
++#endif
++
+         if (!model->load_tensors(ml)) {
+             return {-2, nullptr};
+         }
+ 
++#ifdef GUANACO_ENABLED
++        if (model->guanaco_hook != nullptr) {
++            // Called after load_tensors() completes so CPU_REPACK and all
++            // tensor-data transformations have finished. Seeds hot-expert pins
++            // from a sibling imatrix prior and performs the cold-start pin pass.
++            static_cast<guanaco::GuanacoModelHook*>(model->guanaco_hook)->on_tensors_loaded();
++            static_cast<guanaco::GuanacoModelHook*>(model->guanaco_hook)->advise_random_access(&ml);
++        }
++#endif
++
+         return {0, model_ptr.release()};
+     } catch (const std::exception & err) {
+         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
+@@ -427,6 +469,9 @@ struct llama_model * llama_model_load_from_file(
+         const char * path_model,
+         struct llama_model_params params) {
+     std::vector<std::string> splits = {};
++#ifdef GUANACO_ENABLED
++    LLAMA_LOG_WARN("%s: loading model '%s' with GUANACO\n", __func__, path_model);
++#endif
+     return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, /*file*/ nullptr, params);
+ }
+ 
+@@ -579,3 +624,17 @@ const char * llama_print_system_info(void) {
+     return s.c_str();
+ }
+ 
++#ifdef GUANACO_ENABLED
++void llama_guanaco_enable_streaming(struct llama_context * ctx, bool enable) {
++    // TODO: wire up Guanaco streaming to the context
++    (void)ctx;
++    (void)enable;
++}
++
++void llama_guanaco_set_max_experts(struct llama_context * ctx, int32_t max_experts) {
++    // TODO: wire up Guanaco max experts to the context
++    (void)ctx;
++    (void)max_experts;
++}
++#endif
++
