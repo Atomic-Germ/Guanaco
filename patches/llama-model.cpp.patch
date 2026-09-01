@@ -23,7 +23,7 @@ index e93641b63..fccb162a7 100644
      pimpl->mappings.reserve(ml.mappings.size());
  
      // create the backend buffers
-@@ -1655,6 +1661,71 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1655,6 +1661,61 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
          }
      }
  
@@ -67,16 +67,6 @@ index e93641b63..fccb162a7 100644
 +                    num_experts <= 0 || nb == 0 || nb % (size_t)num_experts != 0) {
 +                    fprintf(stderr, "%s: guanaco skipping '%s' (manifest experts=%d, tensor experts=%d, bytes=%zu) - not a cleanly-routed expert tensor\n",
 +                            __func__, name, e->num_experts_in_tensor, num_experts, nb);
-+                    continue;
-+                }
-+                // MXFP4 (microscaling FP4) stores each expert's weights with
-+                // block scales in a layout our flat per-expert slab copy does
-+                // not reproduce correctly, which corrupts inference. Leave
-+                // such tensors on ggml's normal mmap (correct, just not
-+                // streamed) until the slice layout is supported.
-+                if (t->type == GGML_TYPE_MXFP4) {
-+                    fprintf(stderr, "%s: guanaco skipping '%s' (type=MXFP4) - streaming unsupported for this quant; using mmap\n",
-+                            __func__, name);
 +                    continue;
 +                }
 +                // In-place mmap paging: keep ggml reading from the original

@@ -133,6 +133,11 @@ Deep dive on the pinning knob and the resident/hit-rate tradeoff: see
 Measured results (including the 120 GB-in-4 GB run and the Guanaco-vs-GPU-offload
 comparison): see [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
+Streaming necessarily disables weight repacking (the CPU_REPACK pass copies
+every weight into RAM). Why that also can't be done per-expert, and the
+byte-identity proof that per-expert repack would have worked layout-wise if it
+could: see [`docs/REPACK.md`](docs/REPACK.md).
+
 ## Intelligent prefetching
 
 - **Hot pinning** (`maybe_pin_hot_experts`, `:922`): Tracks per-expert hit
