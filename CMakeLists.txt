@@ -39,7 +39,7 @@ if(GUANACO_PATCH_LLAMA_CPP)
     foreach(PATCH ${PATCH_FILES})
         get_filename_component(PATCH_NAME ${PATCH} NAME)
         execute_process(
-            COMMAND patch -p1 --forward --dry-run -i "${PATCH}"
+            COMMAND patch -p1 --forward --dry-run --no-backup-if-mismatch -i "${PATCH}"
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/llama.cpp
             RESULT_VARIABLE PATCH_CHECK
             ERROR_QUIET
@@ -47,7 +47,7 @@ if(GUANACO_PATCH_LLAMA_CPP)
         )
         if(PATCH_CHECK EQUAL 0)
             execute_process(
-                COMMAND patch -p1 --forward -i "${PATCH}"
+                COMMAND patch -p1 --forward --no-backup-if-mismatch -i "${PATCH}"
                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/llama.cpp
                 RESULT_VARIABLE PATCH_RESULT
             )
@@ -57,7 +57,18 @@ if(GUANACO_PATCH_LLAMA_CPP)
                 message(WARNING "  Failed to apply: ${PATCH_NAME}")
             endif()
         else()
-            message(STATUS "  Skipped (already applied): ${PATCH_NAME}")
+            execute_process(
+                COMMAND patch -p1 --reverse --dry-run --no-backup-if-mismatch -i "${PATCH}"
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/llama.cpp
+                RESULT_VARIABLE PATCH_REVERSE_CHECK
+                ERROR_QUIET
+                OUTPUT_QUIET
+            )
+            if(PATCH_REVERSE_CHECK EQUAL 0)
+                message(STATUS "  Skipped (already applied): ${PATCH_NAME}")
+            else()
+                message(FATAL_ERROR "Patch does not apply to this llama.cpp revision: ${PATCH_NAME}")
+            endif()
         endif()
     endforeach()
     add_compile_definitions(GUANACO_ENABLED=1)
@@ -82,6 +93,9 @@ set(LLAMA_TOOLS_INSTALL ON  CACHE BOOL "" FORCE)
 # (libguanaco.so is emitted to build/bin via LIBRARY_OUTPUT_DIRECTORY below)
 set(CMAKE_BUILD_RPATH  "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+if(UNIX AND NOT APPLE AND (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
+    add_link_options(LINKER:--disable-new-dtags)
+endif()
 add_subdirectory(${CMAKE_SOURCE_DIR}/llama.cpp llama.cpp)
 
 # Add guanaco include path so llama.cpp can find guanaco/guanaco.h when patched
