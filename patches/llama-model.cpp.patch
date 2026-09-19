@@ -1,5 +1,5 @@
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index f9e9a8bcb..e209c9172 100644
+index e195f50d0..631c7209e 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1,5 +1,9 @@
@@ -12,7 +12,7 @@ index f9e9a8bcb..e209c9172 100644
  #include "llama-arch.h"
  #include "llama-ext.h"
  #include "llama-hparams.h"
-@@ -1846,6 +1850,71 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1873,6 +1877,71 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
          }
      }
  
@@ -84,7 +84,7 @@ index f9e9a8bcb..e209c9172 100644
      if (use_mmap_buffer) {
          for (auto & mapping : ml.mappings) {
              pimpl->mappings.emplace_back(std::move(mapping));
-@@ -2775,6 +2844,13 @@ llama_model_params llama_model_default_params() {
+@@ -2802,6 +2871,13 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -98,7 +98,7 @@ index f9e9a8bcb..e209c9172 100644
          /*.load_mtp                    =*/ false,
      };
  
-@@ -3216,6 +3292,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
+@@ -3245,6 +3321,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
      TENSOR_ALLOW_RESHAPE  (llama_model_loader::TENSOR_ALLOW_RESHAPE),
      TENSOR_READ_LAZY      (llama_model_loader::TENSOR_READ_LAZY) {}
  

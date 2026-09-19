@@ -1,8 +1,8 @@
 diff --git a/common/common.h b/common/common.h
-index 919c0ea10..74aeea7f0 100644
+index 63d0badd0..9b32abd03 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -580,6 +580,16 @@ struct common_params {
+@@ -582,6 +582,16 @@ struct common_params {
      bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
      bool no_host           = false; // bypass host buffer allowing extra buffers to be used
  

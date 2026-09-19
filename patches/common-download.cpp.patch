@@ -1,8 +1,8 @@
 diff --git a/common/download.cpp b/common/download.cpp
-index 44c6cea42..8497baeb6 100644
+index 4b28a708c..988a28754 100644
 --- a/common/download.cpp
 +++ b/common/download.cpp
-@@ -595,8 +595,12 @@ static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
+@@ -591,8 +591,12 @@ static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
      auto model_parts = string_split<std::string>(model, '/');
      auto model_dir = model_parts.end() - 1;
  
@@ -16,7 +16,7 @@ index 44c6cea42..8497baeb6 100644
              f.path.find(keyword) == std::string::npos) {
              continue;
          }
-@@ -662,6 +666,11 @@ static hf_cache::hf_file find_best_dspark(const hf_cache::hf_files & files,
+@@ -658,6 +662,11 @@ static hf_cache::hf_file find_best_dspark(const hf_cache::hf_files & files,
      return find_best_sibling(files, model, "dspark-", tag);
  }
  
@@ -28,7 +28,7 @@ index 44c6cea42..8497baeb6 100644
  static bool gguf_filename_is_model(const std::string & filepath) {
      if (!string_ends_with(filepath, ".gguf")) {
          return false;
-@@ -797,6 +806,9 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model &
+@@ -793,6 +802,9 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model &
      if (opts.download_dspark) {
          plan.dspark = find_best_dspark(all, primary.path, tag);
      }
