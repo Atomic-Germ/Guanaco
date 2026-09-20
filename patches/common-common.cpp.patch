@@ -1,18 +1,12 @@
 diff --git a/common/common.cpp b/common/common.cpp
-index d8319cd9a..490f74758 100644
+index d8319cd9a..e9b4b36fe 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -1690,6 +1690,13 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
-     mparams.lazy_mode = params.lazy_mode;
-     mparams.tensor_split    = params.tensor_split;
-     mparams.check_tensors   = params.check_tensors;
-+#ifdef GUANACO_ENABLED
-+    mparams.guanaco_max_experts   = params.guanaco_max_experts;
-+    mparams.guanaco_io_uring      = params.guanaco_io_uring;
-+    mparams.guanaco_pilot         = params.guanaco_pilot;
-+    mparams.guanaco_pilot_mass    = params.guanaco_pilot_mass;
-+    mparams.guanaco_imatrix       = params.guanaco_imatrix;
-+#endif
-     mparams.use_extra_bufts = !params.no_extra_bufts;
-     mparams.no_host         = params.no_host;
+@@ -1747,6 +1747,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
+     cparams.op_offload        = !params.no_op_offload;
+     cparams.swa_full          = params.swa_full;
+     cparams.kv_unified        = params.kv_unified;
++    cparams.gpu_pill          = params.gpu_pill;
  
+     cparams.type_k = params.cache_type_k;
+     cparams.type_v = params.cache_type_v;

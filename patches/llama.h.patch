@@ -1,8 +1,8 @@
 diff --git a/include/llama.h b/include/llama.h
-index ac2215dc7..872279e9d 100644
+index 31bbf8b0d..b67243b2e 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -209,6 +209,7 @@ extern "C" {
+@@ -210,6 +210,7 @@ extern "C" {
          LLAMA_LOAD_MODE_MLOCK      =  2, // force system to keep model in RAM rather than swapping or compressing
          LLAMA_LOAD_MODE_MMAP_MLOCK =  3, // mmap + force system to keep model in RAM rather than swapping or compressing
          LLAMA_LOAD_MODE_DIRECT_IO  =  4, // use direct I/O if available
@@ -10,7 +10,7 @@ index ac2215dc7..872279e9d 100644
      };
  
      LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
-@@ -346,6 +347,13 @@ extern "C" {
+@@ -347,6 +348,13 @@ extern "C" {
          bool use_extra_bufts; // use extra buffer types (used for weight repacking)
          bool no_host;         // bypass host buffer allowing extra buffers to be used
          bool no_alloc;        // only load metadata and simulate memory allocations
@@ -24,7 +24,17 @@ index ac2215dc7..872279e9d 100644
          bool load_mtp;        // whether to load MTP layers
      };
  
-@@ -563,6 +571,11 @@ extern "C" {
+@@ -390,6 +398,9 @@ extern "C" {
+         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
+         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
+ 
++        // GPU-pill UMA KV writeback: -1 = auto (UMA only), 0 = disabled, 1 = enabled
++        int32_t gpu_pill;
++
+         // Abort callback
+         // if it returns true, execution of llama_decode() will be aborted
+         // currently works only with CPU execution
+@@ -564,6 +575,11 @@ extern "C" {
      LLAMA_API bool llama_supports_gpu_offload(void);
      LLAMA_API bool llama_supports_rpc        (void);
  

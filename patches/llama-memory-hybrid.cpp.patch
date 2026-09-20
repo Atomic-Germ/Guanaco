@@ -1,0 +1,20 @@
+diff --git a/src/llama-memory-hybrid.cpp b/src/llama-memory-hybrid.cpp
+index 42c7381a9..14d086448 100644
+--- a/src/llama-memory-hybrid.cpp
++++ b/src/llama-memory-hybrid.cpp
+@@ -27,6 +27,7 @@ llama_memory_hybrid::llama_memory_hybrid(
+                  uint32_t   n_rs_seq,
+                      bool   offload,
+                      bool   unified,
++                     bool   gpu_pill,
+                             /* layer filters */
+     const layer_filter_cb & filter_attn,
+     const layer_filter_cb & filter_recr) :
+@@ -39,6 +40,7 @@ llama_memory_hybrid::llama_memory_hybrid(
+         v_trans,
+         offload,
+         unified,
++        gpu_pill,
+         kv_size,
+         n_seq_max,
+         n_pad,

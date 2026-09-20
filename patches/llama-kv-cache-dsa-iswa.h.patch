@@ -1,0 +1,12 @@
+diff --git a/src/llama-kv-cache-dsa-iswa.h b/src/llama-kv-cache-dsa-iswa.h
+index 28cf95bf0..043d5837a 100644
+--- a/src/llama-kv-cache-dsa-iswa.h
++++ b/src/llama-kv-cache-dsa-iswa.h
+@@ -20,6 +20,7 @@ public:
+                          bool   offload,
+                          bool   swa_full,
+                          bool   unified,
++                         bool   gpu_pill,
+                      uint32_t   kv_size,
+                      uint32_t   n_seq_max,
+                      uint32_t   n_ubatch,
