@@ -1,0 +1,73 @@
+--- a/src/llama-kv-cache.cpp	2026-09-22 00:26:37.245259691 -0700
++++ b/src/llama-kv-cache.cpp	2026-09-22 00:26:37.245297692 -0700
+@@ -4,6 +4,7 @@
+ #include "llama-io.h"
+ #include "llama-model.h"
+ #include "llama-context.h"
++#include "ggml-backend.h"
+ 
+ #include <algorithm>
+ #include <cassert>
+@@ -58,6 +59,26 @@
+     }
+ }
+ 
++using ggml_backend_vk_get_uma_buffer_type_t = ggml_backend_buffer_type_t (*)(ggml_backend_dev_t dev);
++
++static ggml_backend_buffer_type_t ggml_backend_dev_get_uma_buft(ggml_backend_dev_t dev) {
++    if (!dev) {
++        return nullptr;
++    }
++
++    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
++    if (!reg) {
++        return nullptr;
++    }
++
++    auto fn = (ggml_backend_vk_get_uma_buffer_type_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_vk_get_uma_buffer_type");
++    if (!fn) {
++        return nullptr;
++    }
++
++    return fn(dev);
++}
++
+ //
+ // llama_kv_cache
+ //
+@@ -70,6 +91,7 @@
+                      bool   v_trans,
+                      bool   offload,
+                      bool   unified,
++                     bool   gpu_pill,
+                  uint32_t   kv_size,
+                  uint32_t   n_seq_max,
+                  uint32_t   n_pad,
+@@ -216,6 +238,11 @@
+         if (offload) {
+             auto * dev = model.dev_layer(il);
+             buft = ggml_backend_dev_buffer_type(dev);
++            if (gpu_pill) {
++                if (auto * uma_buft = ggml_backend_dev_get_uma_buft(dev)) {
++                    buft = uma_buft;
++                }
++            }
+ 
+             dev_name = ggml_backend_dev_name(dev);
+         }
+@@ -1412,7 +1439,6 @@
+     ggml_tensor * k_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens);
+ 
+     ggml_set_input(k_idxs);
+-    ggml_set_name(k_idxs, "attn_inp_k_idxs");
+ 
+     return k_idxs;
+ }
+@@ -1429,7 +1455,6 @@
+     }
+ 
+     ggml_set_input(v_idxs);
+-    ggml_set_name(v_idxs, "attn_inp_v_idxs");
+ 
+     return v_idxs;
+ }

@@ -1,0 +1,11 @@
+--- a/src/llama-memory.h	2026-09-22 00:26:37.278288027 -0700
++++ b/src/llama-memory.h	2026-09-22 00:26:37.278300029 -0700
+@@ -19,6 +19,8 @@
+     ggml_type type_k;
+     ggml_type type_v;
+ 
++    bool gpu_pill;
++
+     // use full-size SWA cache
+     bool swa_full;
+ 

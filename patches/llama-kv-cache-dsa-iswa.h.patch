@@ -1,0 +1,10 @@
+--- a/src/llama-kv-cache-dsa-iswa.h	2026-09-22 00:26:37.254418249 -0700
++++ b/src/llama-kv-cache-dsa-iswa.h	2026-09-22 00:26:37.254433558 -0700
+@@ -20,6 +20,7 @@
+                          bool   offload,
+                          bool   swa_full,
+                          bool   unified,
++                         bool   gpu_pill,
+                      uint32_t   kv_size,
+                      uint32_t   n_seq_max,
+                      uint32_t   n_ubatch,

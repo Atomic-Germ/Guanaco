@@ -1,8 +1,6 @@
-diff --git a/common/common.cpp b/common/common.cpp
-index d8319cd9a..490f74758 100644
---- a/common/common.cpp
-+++ b/common/common.cpp
-@@ -1690,6 +1690,13 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
+--- a/common/common.cpp	2026-09-22 00:26:37.198685052 -0700
++++ b/common/common.cpp	2026-09-22 00:26:37.198724426 -0700
+@@ -1690,6 +1690,13 @@
      mparams.lazy_mode = params.lazy_mode;
      mparams.tensor_split    = params.tensor_split;
      mparams.check_tensors   = params.check_tensors;
@@ -16,3 +14,11 @@ index d8319cd9a..490f74758 100644
      mparams.use_extra_bufts = !params.no_extra_bufts;
      mparams.no_host         = params.no_host;
  
+@@ -1747,6 +1754,7 @@
+     cparams.op_offload        = !params.no_op_offload;
+     cparams.swa_full          = params.swa_full;
+     cparams.kv_unified        = params.kv_unified;
++    cparams.gpu_pill          = params.gpu_pill;
+ 
+     cparams.type_k = params.cache_type_k;
+     cparams.type_v = params.cache_type_v;

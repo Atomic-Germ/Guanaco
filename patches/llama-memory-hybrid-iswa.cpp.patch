@@ -1,0 +1,18 @@
+--- a/src/llama-memory-hybrid-iswa.cpp	2026-09-22 00:26:37.296408965 -0700
++++ b/src/llama-memory-hybrid-iswa.cpp	2026-09-22 00:26:37.296426077 -0700
+@@ -27,6 +27,7 @@
+                  uint32_t   n_rs_seq,
+                      bool   offload,
+                      bool   unified,
++                     bool   gpu_pill,
+                             /* layer filters */
+     const layer_filter_cb & filter_attn,
+     const layer_filter_cb & filter_recr) :
+@@ -39,6 +40,7 @@
+         offload,
+         swa_full,
+         unified,
++        gpu_pill,
+         kv_size,
+         n_seq_max,
+         n_ubatch,

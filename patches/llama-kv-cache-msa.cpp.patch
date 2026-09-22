@@ -1,0 +1,28 @@
+--- a/src/llama-kv-cache-msa.cpp	2026-09-22 00:26:37.275722322 -0700
++++ b/src/llama-kv-cache-msa.cpp	2026-09-22 00:26:37.275736057 -0700
+@@ -17,6 +17,7 @@
+                      bool   v_trans,
+                      bool   offload,
+                      bool   unified,
++                     bool   gpu_pill,
+                  uint32_t   kv_size,
+                  uint32_t   n_seq_max,
+                  uint32_t   n_pad,
+@@ -33,7 +34,7 @@
+ 
+     kv_base = std::make_unique<llama_kv_cache>(
+             model, model.hparams, type_k, type_v,
+-            v_trans, offload, unified, kv_size, n_seq_max, n_pad,
++            v_trans, offload, unified, gpu_pill, kv_size, n_seq_max, n_pad,
+             n_swa, swa_type, nullptr, filter, reuse, nullptr);
+ 
+     // the MSA indexer uses a single key head per layer
+@@ -45,7 +46,7 @@
+ 
+     kv_idx = std::make_unique<llama_kv_cache>(
+             model, hparams_idx, type_k, type_v,
+-            v_trans, offload, unified, kv_size, n_seq_max, n_pad,
++            v_trans, offload, unified, gpu_pill, kv_size, n_seq_max, n_pad,
+             n_swa, swa_type, nullptr, filter_idx, reuse, nullptr);
+ }
+ 

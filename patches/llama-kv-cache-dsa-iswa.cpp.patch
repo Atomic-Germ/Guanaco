@@ -1,0 +1,27 @@
+--- a/src/llama-kv-cache-dsa-iswa.cpp	2026-09-22 00:26:37.257181555 -0700
++++ b/src/llama-kv-cache-dsa-iswa.cpp	2026-09-22 00:26:37.257199008 -0700
+@@ -19,6 +19,7 @@
+                      bool   offload,
+                      bool   swa_full,
+                      bool   unified,
++                     bool   gpu_pill,
+                  uint32_t   kv_size,
+                  uint32_t   n_seq_max,
+                  uint32_t   n_ubatch,
+@@ -64,14 +65,14 @@
+ 
+     kv_dsa = std::make_unique<llama_kv_cache_dsa>(
+             model, type_k, type_v,
+-            v_trans, offload, unified, size_dsa, n_seq_max, n_pad,
++            v_trans, offload, unified, gpu_pill, size_dsa, n_seq_max, n_pad,
+             0, LLAMA_SWA_TYPE_NONE, filter_dsa, filter_lid, reuse);
+ 
+     LLAMA_LOG_INFO("%s: creating SWA KV cache, size = %u cells\n", __func__, size_swa);
+ 
+     kv_swa = std::make_unique<llama_kv_cache>(
+             model, hparams, type_k, type_v,
+-            v_trans, offload, unified, size_swa, n_seq_max, n_pad,
++            v_trans, offload, unified, gpu_pill, size_swa, n_seq_max, n_pad,
+             hparams.n_swa, hparams.swa_type, nullptr, filter_swa, reuse, nullptr);
+ }
+ 

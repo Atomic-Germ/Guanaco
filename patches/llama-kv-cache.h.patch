@@ -1,0 +1,10 @@
+--- a/src/llama-kv-cache.h	2026-09-22 00:26:37.241626943 -0700
++++ b/src/llama-kv-cache.h	2026-09-22 00:26:37.241644877 -0700
+@@ -104,6 +104,7 @@
+                          bool   v_trans,
+                          bool   offload,
+                          bool   unified,
++                         bool   gpu_pill,
+                      uint32_t   kv_size,
+                      uint32_t   n_seq_max,
+                      uint32_t   n_pad,

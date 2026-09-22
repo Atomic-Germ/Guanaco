@@ -1,7 +1,5 @@
-diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index e195f50d0..631c7209e 100644
---- a/src/llama-model.cpp
-+++ b/src/llama-model.cpp
+--- a/src/llama-model.cpp	2026-09-22 00:26:37.207348702 -0700
++++ b/src/llama-model.cpp	2026-09-22 00:26:37.207386723 -0700
 @@ -1,5 +1,9 @@
  #include "llama-model.h"
  
@@ -12,7 +10,7 @@ index e195f50d0..631c7209e 100644
  #include "llama-arch.h"
  #include "llama-ext.h"
  #include "llama-hparams.h"
-@@ -1873,6 +1877,71 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1873,6 +1877,71 @@
          }
      }
  
@@ -84,7 +82,181 @@ index e195f50d0..631c7209e 100644
      if (use_mmap_buffer) {
          for (auto & mapping : ml.mappings) {
              pimpl->mappings.emplace_back(std::move(mapping));
-@@ -2802,6 +2871,13 @@ llama_model_params llama_model_default_params() {
+@@ -2307,6 +2376,7 @@
+                         !cparams.flash_attn,
+                         cparams.offload_kqv,
+                         cparams.kv_unified,
++                        params.gpu_pill,
+                         cparams.n_ctx_seq,
+                         cparams.n_seq_max,
+                         1,
+@@ -2334,12 +2404,13 @@
+                             !cparams.flash_attn,
+                             cparams.offload_kqv,
+                             cparams.kv_unified,
++                            params.gpu_pill,
+                             cparams.n_ctx_seq,
+                             cparams.n_seq_max,
+                             1,
+                             hparams.n_swa,
+                             hparams.swa_type,
+-                            nullptr,
++                            params.mem_other,
+                             filter,
+                             nullptr,
+                             nullptr);
+@@ -2359,6 +2430,7 @@
+                             !cparams.flash_attn,
+                             cparams.offload_kqv,
+                             cparams.kv_unified,
++                            params.gpu_pill,
+                             cparams.n_ctx_seq,
+                             cparams.n_seq_max,
+                             1,
+@@ -2381,12 +2453,13 @@
+                             !cparams.flash_attn,
+                             cparams.offload_kqv,
+                             cparams.kv_unified,
++                            params.gpu_pill,
+                             cparams.n_ctx_seq,
+                             cparams.n_seq_max,
+                             1,
+                             hparams.n_swa,
+                             hparams.swa_type,
+-                            nullptr,
++                            params.mem_other,
+                             nullptr,
+                             nullptr,
+                             nullptr);
+@@ -2401,6 +2474,7 @@
+                             !cparams.flash_attn,
+                             cparams.offload_kqv,
+                             cparams.kv_unified,
++                            params.gpu_pill,
+                             cparams.n_ctx_seq,
+                             cparams.n_seq_max,
+                             1,
+@@ -2428,12 +2502,13 @@
+                             !cparams.flash_attn,
+                             cparams.offload_kqv,
+                             cparams.kv_unified,
++                            params.gpu_pill,
+                             cparams.n_ctx_seq,
+                             cparams.n_seq_max,
+                             1,
+                             hparams.n_swa,
+                             hparams.swa_type,
+-                            nullptr,
++                            params.mem_other,
+                             filter,
+                             nullptr,
+                             nullptr);
+@@ -2453,6 +2528,7 @@
+                             cparams.offload_kqv,
+                             params.swa_full,
+                             cparams.kv_unified,
++                            params.gpu_pill,
+                             cparams.n_ctx_seq,
+                             cparams.n_seq_max,
+                             cparams.n_ubatch,
+@@ -2479,11 +2555,12 @@
+                             cparams.offload_kqv,
+                             params.swa_full,
+                             cparams.kv_unified,
++                            params.gpu_pill,
+                             cparams.n_ctx_seq,
+                             cparams.n_seq_max,
+                             cparams.n_ubatch,
+                             1,
+-                            nullptr,
++                            params.mem_other,
+                             filter_mtp,
+                             nullptr,
+                             nullptr);
+@@ -2496,6 +2573,7 @@
+                             cparams.offload_kqv,
+                             params.swa_full,
+                             cparams.kv_unified,
++                            params.gpu_pill,
+                             cparams.n_ctx_seq,
+                             cparams.n_seq_max,
+                             cparams.n_ubatch,
+@@ -2519,11 +2597,12 @@
+                             cparams.offload_kqv,
+                             params.swa_full,
+                             cparams.kv_unified,
++                            params.gpu_pill,
+                             cparams.n_ctx_seq,
+                             cparams.n_seq_max,
+                             cparams.n_ubatch,
+                             1,
+-                            nullptr,
++                            params.mem_other,
+                             nullptr,
+                             nullptr,
+                             nullptr);
+@@ -2607,6 +2686,7 @@
+                             /* n_rs_seq          */ cparams.n_rs_seq,
+                             /* offload           */ cparams.offload_kqv,
+                             /* unified           */ cparams.kv_unified,
++                            /* gpu_pill          */ params.gpu_pill,
+                             /* filter_attn       */ std::move(filter_attn),
+                             /* filter_recr       */ std::move(filter_recr));
+                     } else if (needs_mem_idx) {
+@@ -2627,6 +2707,7 @@
+                             /* n_rs_seq          */ cparams.n_rs_seq,
+                             /* offload           */ cparams.offload_kqv,
+                             /* unified           */ cparams.kv_unified,
++                            /* gpu_pill          */ params.gpu_pill,
+                             /* filter_attn       */ std::move(filter_attn),
+                             /* filter_recr       */ std::move(filter_recr),
+                             /* filter_idx        */ std::move(filter_idx));
+@@ -2647,6 +2728,7 @@
+                             /* n_rs_seq          */ cparams.n_rs_seq,
+                             /* offload           */ cparams.offload_kqv,
+                             /* unified           */ cparams.kv_unified,
++                            /* gpu_pill          */ params.gpu_pill,
+                             /* filter_attn       */ std::move(filter_attn),
+                             /* filter_recr       */ std::move(filter_recr));
+                     }
+@@ -2705,6 +2787,7 @@
+                                     cparams.offload_kqv,
+                                     params.swa_full,
+                                     cparams.kv_unified,
++                                    params.gpu_pill,
+                                     cparams.n_ctx_seq,
+                                     cparams.n_seq_max,
+                                     cparams.n_ubatch,
+@@ -2722,11 +2805,12 @@
+                                     cparams.offload_kqv,
+                                     params.swa_full,
+                                     cparams.kv_unified,
++                                    params.gpu_pill,
+                                     cparams.n_ctx_seq,
+                                     cparams.n_seq_max,
+                                     cparams.n_ubatch,
+                                     1,
+-                                    nullptr,
++                                    params.mem_other,
+                                     filter,
+                                     reuse,
+                                     share);
+@@ -2742,12 +2826,13 @@
+                                 !cparams.flash_attn,
+                                 cparams.offload_kqv,
+                                 cparams.kv_unified,
++                                params.gpu_pill,
+                                 cparams.n_ctx_seq,
+                                 cparams.n_seq_max,
+                                 1,
+                                 hparams.n_swa,
+                                 hparams.swa_type,
+-                                nullptr,
++                                params.mem_other,
+                                 filter,
+                                 nullptr,
+                                 nullptr);
+@@ -2802,6 +2887,13 @@
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -98,7 +270,7 @@ index e195f50d0..631c7209e 100644
          /*.load_mtp                    =*/ false,
      };
  
-@@ -3245,6 +3321,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
+@@ -3245,6 +3337,15 @@
      TENSOR_ALLOW_RESHAPE  (llama_model_loader::TENSOR_ALLOW_RESHAPE),
      TENSOR_READ_LAZY      (llama_model_loader::TENSOR_READ_LAZY) {}
  

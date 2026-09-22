@@ -1,0 +1,10 @@
+--- a/src/llama-cparams.h	2026-09-22 00:26:37.238794177 -0700
++++ b/src/llama-cparams.h	2026-09-22 00:26:37.238808925 -0700
+@@ -52,6 +52,7 @@
+     bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
+     bool op_offload;
+     bool kv_unified;
++    bool gpu_pill;
+     bool pipeline_parallel;
+ 
+     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer

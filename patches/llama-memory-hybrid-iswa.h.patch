@@ -1,0 +1,10 @@
+--- a/src/llama-memory-hybrid-iswa.h	2026-09-22 00:26:37.293702736 -0700
++++ b/src/llama-memory-hybrid-iswa.h	2026-09-22 00:26:37.293718325 -0700
+@@ -37,6 +37,7 @@
+                  uint32_t   n_rs_seq,
+                      bool   offload,
+                      bool   unified,
++                     bool   gpu_pill,
+                             /* layer filters */
+     const layer_filter_cb & filter_attn = nullptr,
+     const layer_filter_cb & filter_recr = nullptr);

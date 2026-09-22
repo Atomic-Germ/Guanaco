@@ -1,8 +1,6 @@
-diff --git a/common/arg.cpp b/common/arg.cpp
-index c4c4e143c..5daa608ba 100644
---- a/common/arg.cpp
-+++ b/common/arg.cpp
-@@ -396,6 +396,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
+--- a/common/arg.cpp	2026-09-22 00:26:37.195725839 -0700
++++ b/common/arg.cpp	2026-09-22 00:26:37.195981258 -0700
+@@ -396,6 +396,7 @@
      opts.download_dspark = spec_type_draft_dspark;
      opts.download_mmproj = use_mmproj && !params.no_mmproj
                          && params.mmproj.path.empty() && params.mmproj.url.empty();
@@ -10,7 +8,7 @@ index c4c4e143c..5daa608ba 100644
  
      if (!params.model.hf_repo.empty()) {
          plan = common_download_get_hf_plan(params.model, opts);
-@@ -674,6 +675,11 @@ void common_models_handler_apply(common_models_handler & handler, common_params
+@@ -674,6 +675,11 @@
              }
          });
      }
@@ -22,11 +20,26 @@ index c4c4e143c..5daa608ba 100644
      if (!plan.preset.local_path.empty()) {
          tasks.emplace_back(plan.preset, opts, [&]() {
              // if HF repo is a preset repo, we simply run server in router mode with the preset.ini file
-@@ -2683,6 +2689,57 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
-             }
+@@ -2408,6 +2414,15 @@
+         }
+     ).set_env("LLAMA_ARG_GRP_ATTN_W").set_examples({LLAMA_EXAMPLE_COMPLETION}));
+     add_opt(common_arg(
++        {"--gpu-pill"},
++        {"--no-gpu-pill"},
++        string_format("whether to enable GPU-pill UMA KV writeback (default: %s)",
++                      params.gpu_pill < 0 ? "auto" : (params.gpu_pill ? "enabled" : "disabled")),
++        [](common_params & params, bool value) {
++            params.gpu_pill = value ? 1 : 0;
++        }
++    ).set_env("LLAMA_GPU_PILL"));
++    add_opt(common_arg(
+         {"-kvo", "--kv-offload"},
+         {"-nkvo", "--no-kv-offload"},
+         string_format("whether to enable KV cache offloading (default: %s)", params.no_kv_offload ? "disabled" : "enabled"),
+@@ -2684,6 +2699,57 @@
          ).set_env("LLAMA_ARG_RPC"));
      }
-+    add_opt(common_arg(
+     add_opt(common_arg(
 +        {"-gs", "--guanaco-streaming"},
 +        {"-ngs", "--no-guanaco-streaming"},
 +        "deprecated alias for --load-mode streaming",
@@ -77,20 +90,22 @@ index c4c4e143c..5daa608ba 100644
 +            params.guanaco_imatrix = value;
 +        }
 +    ).set_env("LLAMA_ARG_GUANACO_IMATRIX"));
-     add_opt(common_arg(
++    add_opt(common_arg(
          {"-lm", "--load-mode"}, "MODE",
          "model loading mode (default: auto)\n"
-@@ -2691,7 +2748,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+         "- auto: mmap, unless a device does not support it\n"
+@@ -2691,7 +2757,9 @@
          "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
          "- mlock: force system to keep model in RAM rather than swapping or compressing\n"
          "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
 -        "- dio: use DirectIO if available\n",
 +        "- dio: use DirectIO if available\n"
-+        "- streaming: mmap + stream MoE experts from disk on demand (Guanaco)\n",
++        "- streaming: mmap + stream MoE experts from disk on demand (Guanaco)\n"
++        "- streaming: use Guanaco streaming loader when available\n",
          [](common_params & params, const std::string & value) {
              /**/ if (value == "auto")       { params.load_mode = LLAMA_LOAD_MODE_AUTO;       }
              else if (value == "none")       { params.load_mode = LLAMA_LOAD_MODE_NONE;       }
-@@ -2699,6 +2757,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2699,6 +2767,7 @@
              else if (value == "mlock")      { params.load_mode = LLAMA_LOAD_MODE_MLOCK;      }
              else if (value == "mmap+mlock") { params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK; }
              else if (value == "dio")        { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;  }

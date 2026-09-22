@@ -1,0 +1,10 @@
+--- a/src/llama-kv-cache-dsv4.h	2026-09-22 00:26:37.259972633 -0700
++++ b/src/llama-kv-cache-dsv4.h	2026-09-22 00:26:37.259991258 -0700
+@@ -95,6 +95,7 @@
+                          bool   offload,
+                          bool   swa_full,
+                          bool   unified,
++                         bool   gpu_pill,
+                      uint32_t   kv_size,
+                      uint32_t   n_seq_max,
+                      uint32_t   n_ubatch,
