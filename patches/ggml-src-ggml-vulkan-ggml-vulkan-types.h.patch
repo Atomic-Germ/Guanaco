@@ -1,15 +1,12 @@
---- a/ggml/src/ggml-vulkan/ggml-vulkan-types.h	2026-09-22 00:26:37.235070288 -0700
-+++ b/ggml/src/ggml-vulkan/ggml-vulkan-types.h	2026-09-22 00:26:37.235103290 -0700
-@@ -1009,6 +1009,7 @@
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan-types.h b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
+index 4158ff7..8759edc 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan-types.h
++++ b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
+@@ -1025,6 +1025,7 @@ struct vk_device_struct {
      vk_buffer sync_staging;
  
      ggml_backend_buffer_type buffer_type;
 +    ggml_backend_buffer_type buffer_type_uma;
  
      bool disable_fusion;
-     bool disable_host_visible_vidmem;
-@@ -1429,4 +1430,3 @@
-     std::string pci_bus_id;
-     int op_offload_min_batch_size;
- };
--
+     bool disable_descriptor_reuse;

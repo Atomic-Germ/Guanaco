@@ -1,5 +1,5 @@
 diff --git a/common/download.h b/common/download.h
-index 8c30cfc3e..dcb114eac 100644
+index 8c30cfc..dcb114e 100644
 --- a/common/download.h
 +++ b/common/download.h
 @@ -60,6 +60,7 @@ struct common_download_opts {

@@ -1,6 +1,8 @@
---- a/ggml/src/ggml-backend.cpp	2026-09-22 00:26:37.211425012 -0700
-+++ b/ggml/src/ggml-backend.cpp	2026-09-22 00:26:37.211467812 -0700
-@@ -779,6 +779,8 @@
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+index ff3f079..2bbdb37 100644
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -919,6 +919,8 @@ struct ggml_backend_sched_split {
      struct ggml_tensor ** inputs;
      int n_inputs;
      int inputs_capacity;
@@ -9,7 +11,7 @@
      // graph view of this split
      struct ggml_cgraph graph;
  };
-@@ -860,6 +862,25 @@
+@@ -1003,6 +1005,25 @@ static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split
      split->inputs_capacity = new_cap;
  }
  
@@ -35,7 +37,7 @@
  static void ggml_backend_sched_graph_inputs_grow(ggml_backend_sched_t sched) {
      int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
      if (sched->graph_inputs_capacity > 0) {
-@@ -1309,6 +1330,7 @@
+@@ -1452,6 +1473,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
          }
          split->i_start = 0;
          split->n_inputs = 0;
@@ -43,7 +45,7 @@
          int cur_backend_id = split->backend_id;
          for (; i < graph->n_nodes; i++) {
              struct ggml_tensor * node = graph->nodes[i];
-@@ -1358,6 +1380,7 @@
+@@ -1501,6 +1523,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                  split->backend_id = node_backend_id;
                  split->i_start = i;
                  split->n_inputs = 0;
@@ -51,9 +53,9 @@
                  cur_backend_id = node_backend_id;
              }
  
-@@ -1396,27 +1419,31 @@
-                     }
-                 }
+@@ -1515,27 +1538,31 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
+                 const int src_backend_id = sched->hv_tensor_backend_ids[src_id];
+                 GGML_ASSERT(src_backend_id != -1); // all inputs should be assigned by now
  
 -                if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
 -                    // create a copy of the input in the split's backend
@@ -101,7 +103,7 @@
                  }
              }
          }
-@@ -1795,6 +1822,18 @@
+@@ -1884,6 +1911,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
              }
          }
  

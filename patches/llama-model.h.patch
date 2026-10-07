@@ -1,5 +1,5 @@
 diff --git a/src/llama-model.h b/src/llama-model.h
-index 984b2cf38..845281086 100644
+index 8212447..887eadb 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
 @@ -14,6 +14,11 @@
@@ -14,7 +14,7 @@ index 984b2cf38..845281086 100644
  struct llama_cparams;
  struct llama_ubatch;
  struct llama_model_loader;
-@@ -797,8 +802,13 @@ struct llama_model_base : public llama_model {
+@@ -832,8 +837,13 @@ struct llama_model_base : public llama_model {
      const int TENSOR_ALLOW_RESHAPE;
      const int TENSOR_READ_LAZY;
  

@@ -1,6 +1,8 @@
---- a/src/llama-kv-cache-dsa-iswa.h	2026-09-22 00:26:37.254418249 -0700
-+++ b/src/llama-kv-cache-dsa-iswa.h	2026-09-22 00:26:37.254433558 -0700
-@@ -20,6 +20,7 @@
+diff --git a/src/llama-kv-cache-dsa-iswa.h b/src/llama-kv-cache-dsa-iswa.h
+index 28cf95b..043d583 100644
+--- a/src/llama-kv-cache-dsa-iswa.h
++++ b/src/llama-kv-cache-dsa-iswa.h
+@@ -20,6 +20,7 @@ public:
                           bool   offload,
                           bool   swa_full,
                           bool   unified,

@@ -1,5 +1,7 @@
---- a/src/llama-context.cpp	2026-09-22 00:26:37.202677635 -0700
-+++ b/src/llama-context.cpp	2026-09-22 00:26:37.202722690 -0700
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 5f861f9..9a067d3 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
 @@ -1,5 +1,6 @@
  #include "llama-context.h"
  
@@ -7,7 +9,7 @@
  #include "ggml.h"
  #include "llama-arch.h"
  #include "llama-graph.h"
-@@ -13,8 +14,13 @@
+@@ -14,8 +15,13 @@
  #include "llama-sampler.h"
  #include "llama.h"
  
@@ -21,7 +23,7 @@
  #include <cstring>
  #include <limits>
  #include <stdexcept>
-@@ -33,6 +39,26 @@
+@@ -34,6 +40,26 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
      throw std::runtime_error("Unsupported ctx type");
  }
  
@@ -48,9 +50,9 @@
  struct llm_fused_op_probe {
      llm_fused_op op;
      const char * name;
-@@ -273,6 +299,43 @@
-     cparams.op_offload = params.op_offload;
-     cparams.kv_unified = params.kv_unified;
+@@ -277,6 +303,43 @@ llama_context::llama_context(
+     cparams.kv_unified     = params.kv_unified;
+     cparams.moe_cache_size = params.moe_cache_size;
  
 +    {
 +        bool has_igpu = false;
@@ -91,8 +93,8 @@
 +
      // initialized later
      cparams.pipeline_parallel = false;
- 
-@@ -312,6 +375,7 @@
+     cparams.training = false;
+@@ -317,6 +380,7 @@ llama_context::llama_context(
      LLAMA_LOG_INFO("%s: causal_attn           = %d\n",   __func__, cparams.causal_attn);
      LLAMA_LOG_INFO("%s: flash_attn            = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
      LLAMA_LOG_INFO("%s: kv_unified            = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
@@ -100,7 +102,7 @@
      LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
      LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
      LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
-@@ -388,6 +452,7 @@
+@@ -393,6 +457,7 @@ llama_context::llama_context(
          llama_memory_params params_mem = {
              /*.type_k    =*/ params.type_k,
              /*.type_v    =*/ params.type_v,
@@ -108,8 +110,8 @@
              /*.swa_full  =*/ params.swa_full,
              /*.ctx_type  =*/ cparams.ctx_type,
              /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
-@@ -459,6 +524,10 @@
-             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
+@@ -480,6 +545,10 @@ llama_context::llama_context(
+             }
          }
  
 +        if (cparams.gpu_pill && getenv("GGML_OP_OFFLOAD_MIN_BATCH") == nullptr) {
@@ -119,15 +121,15 @@
          sched_reserve();
  
          if (!cparams.flash_attn) {
-@@ -3720,6 +3789,7 @@
-         /*.cb_eval_user_data           =*/ nullptr,
+@@ -3901,6 +3970,7 @@ llama_context_params llama_context_default_params() {
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
+         /*.moe_cache_size              =*/ 0,
 +        /*.gpu_pill                    =*/ -1,
          /*.abort_callback              =*/ nullptr,
          /*.abort_callback_data         =*/ nullptr,
          /*.embeddings                  =*/ false,
-@@ -3737,13 +3807,49 @@
+@@ -3918,13 +3988,49 @@ llama_context_params llama_context_default_params() {
  }
  
  llama_context * llama_init_from_model(

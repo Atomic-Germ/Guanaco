@@ -1,6 +1,8 @@
---- a/src/llama-kv-cache.h	2026-09-22 00:26:37.241626943 -0700
-+++ b/src/llama-kv-cache.h	2026-09-22 00:26:37.241644877 -0700
-@@ -104,6 +104,7 @@
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 9bfb8f2..93b4edd 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -104,6 +104,7 @@ public:
                           bool   v_trans,
                           bool   offload,
                           bool   unified,

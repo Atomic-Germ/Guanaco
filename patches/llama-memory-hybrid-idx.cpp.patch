@@ -1,6 +1,8 @@
---- a/src/llama-memory-hybrid-idx.cpp	2026-09-22 00:26:37.290855302 -0700
-+++ b/src/llama-memory-hybrid-idx.cpp	2026-09-22 00:26:37.290883325 -0700
-@@ -35,6 +35,7 @@
+diff --git a/src/llama-memory-hybrid-idx.cpp b/src/llama-memory-hybrid-idx.cpp
+index 21ec0b2..112ee72 100644
+--- a/src/llama-memory-hybrid-idx.cpp
++++ b/src/llama-memory-hybrid-idx.cpp
+@@ -39,6 +39,7 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
                   uint32_t   n_rs_seq,
                       bool   offload,
                       bool   unified,
@@ -8,7 +10,7 @@
                              /* layer filters */
      const layer_filter_cb & filter_attn,
      const layer_filter_cb & filter_recr,
-@@ -43,7 +44,7 @@
+@@ -47,7 +48,7 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
          model,
          type_k, type_v, v_trans, kv_size, n_pad, n_swa, swa_type,
          type_r, type_s, rs_size,
@@ -17,7 +19,7 @@
          filter_attn, filter_recr),
      hparams_idx(model.hparams),
      mem_idx(filter_idx == nullptr ? nullptr : [&] {
-@@ -62,7 +63,7 @@
+@@ -68,7 +69,7 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
          LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
  
          return new llama_kv_cache(

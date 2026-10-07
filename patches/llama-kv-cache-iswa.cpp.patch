@@ -1,6 +1,8 @@
---- a/src/llama-kv-cache-iswa.cpp	2026-09-22 00:26:37.269121373 -0700
-+++ b/src/llama-kv-cache-iswa.cpp	2026-09-22 00:26:37.269136632 -0700
-@@ -19,6 +19,7 @@
+diff --git a/src/llama-kv-cache-iswa.cpp b/src/llama-kv-cache-iswa.cpp
+index e918664..9bd5f85 100644
+--- a/src/llama-kv-cache-iswa.cpp
++++ b/src/llama-kv-cache-iswa.cpp
+@@ -19,6 +19,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
                       bool   offload,
                       bool   swa_full,
                       bool   unified,
@@ -8,7 +10,7 @@
                   uint32_t   kv_size,
                   uint32_t   n_seq_max,
                   uint32_t   n_ubatch,
-@@ -27,7 +28,7 @@
+@@ -27,7 +28,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
      const layer_filter_cb & filter,
      const  layer_reuse_cb & reuse,
      const  layer_share_cb & share) :
@@ -17,7 +19,7 @@
              kv_size, n_seq_max, n_ubatch, n_pad, mem_other, filter, reuse, share) {
  }
  
-@@ -40,6 +41,7 @@
+@@ -40,6 +41,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
                       bool   offload,
                       bool   swa_full,
                       bool   unified,
@@ -25,7 +27,7 @@
                   uint32_t   kv_size,
                   uint32_t   n_seq_max,
                   uint32_t   n_ubatch,
-@@ -94,14 +96,14 @@
+@@ -94,14 +96,14 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
  
      kv_base = std::make_unique<llama_kv_cache>(
              model, hparams, type_k, type_v,

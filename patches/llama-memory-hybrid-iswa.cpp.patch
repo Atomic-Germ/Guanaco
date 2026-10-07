@@ -1,6 +1,8 @@
---- a/src/llama-memory-hybrid-iswa.cpp	2026-09-22 00:26:37.296408965 -0700
-+++ b/src/llama-memory-hybrid-iswa.cpp	2026-09-22 00:26:37.296426077 -0700
-@@ -27,6 +27,7 @@
+diff --git a/src/llama-memory-hybrid-iswa.cpp b/src/llama-memory-hybrid-iswa.cpp
+index 06f7fd5..40cc84a 100644
+--- a/src/llama-memory-hybrid-iswa.cpp
++++ b/src/llama-memory-hybrid-iswa.cpp
+@@ -27,6 +27,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
                   uint32_t   n_rs_seq,
                       bool   offload,
                       bool   unified,
@@ -8,7 +10,7 @@
                              /* layer filters */
      const layer_filter_cb & filter_attn,
      const layer_filter_cb & filter_recr) :
-@@ -39,6 +40,7 @@
+@@ -39,6 +40,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
          offload,
          swa_full,
          unified,

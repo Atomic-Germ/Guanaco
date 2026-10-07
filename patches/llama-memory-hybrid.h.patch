@@ -1,6 +1,8 @@
---- a/src/llama-memory-hybrid.h	2026-09-22 00:26:37.280784101 -0700
-+++ b/src/llama-memory-hybrid.h	2026-09-22 00:26:37.280801003 -0700
-@@ -37,6 +37,7 @@
+diff --git a/src/llama-memory-hybrid.h b/src/llama-memory-hybrid.h
+index 484eafb..629343d 100644
+--- a/src/llama-memory-hybrid.h
++++ b/src/llama-memory-hybrid.h
+@@ -37,6 +37,7 @@ public:
                   uint32_t   n_rs_seq,
                       bool   offload,
                       bool   unified,

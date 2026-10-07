@@ -1,8 +1,8 @@
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index b6835e434..663b81e8f 100644
+index 6f35192..ada1146 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -2371,6 +2371,90 @@ private:
+@@ -2583,6 +2583,90 @@ private:
                  cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
      }
  
@@ -93,7 +93,7 @@ index b6835e434..663b81e8f 100644
      // returns false to decline the task, it is offered again after the decode is done
      bool process_single_task(server_task && task, bool is_yielding) {
          // while yielding, an encode / decode is running and only reading the server state is safe
-@@ -2578,6 +2662,7 @@ private:
+@@ -2791,6 +2875,7 @@ private:
                          send_error(task, "Unable to save slot", ERROR_TYPE_SERVER);
                          break;
                      }
@@ -101,7 +101,7 @@ index b6835e434..663b81e8f 100644
  
                      const int64_t t_end = ggml_time_us();
                      const double t_save_ms = (t_end - t_start) / 1000.0;
-@@ -2638,6 +2723,7 @@ private:
+@@ -2851,6 +2936,7 @@ private:
  
                          slot->prompt.clear();
                          slot->prompt.tokens = std::move(restored);

@@ -1,6 +1,8 @@
---- a/common/arg.cpp	2026-09-22 00:26:37.195725839 -0700
-+++ b/common/arg.cpp	2026-09-22 00:26:37.195981258 -0700
-@@ -396,6 +396,7 @@
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 182f76f..1859cd4 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -399,6 +399,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
      opts.download_dspark = spec_type_draft_dspark;
      opts.download_mmproj = use_mmproj && !params.no_mmproj
                          && params.mmproj.path.empty() && params.mmproj.url.empty();
@@ -8,7 +10,7 @@
  
      if (!params.model.hf_repo.empty()) {
          plan = common_download_get_hf_plan(params.model, opts);
-@@ -674,6 +675,11 @@
+@@ -677,6 +678,11 @@ void common_models_handler_apply(common_models_handler & handler, common_params
              }
          });
      }
@@ -20,10 +22,11 @@
      if (!plan.preset.local_path.empty()) {
          tasks.emplace_back(plan.preset, opts, [&]() {
              // if HF repo is a preset repo, we simply run server in router mode with the preset.ini file
-@@ -2408,6 +2414,15 @@
+@@ -2413,6 +2419,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.grp_attn_w = value;
          }
      ).set_env("LLAMA_ARG_GRP_ATTN_W").set_examples({LLAMA_EXAMPLE_COMPLETION}));
-     add_opt(common_arg(
++    add_opt(common_arg(
 +        {"--gpu-pill"},
 +        {"--no-gpu-pill"},
 +        string_format("whether to enable GPU-pill UMA KV writeback (default: %s)",
@@ -32,14 +35,14 @@
 +            params.gpu_pill = value ? 1 : 0;
 +        }
 +    ).set_env("LLAMA_GPU_PILL"));
-+    add_opt(common_arg(
+     add_opt(common_arg(
          {"-kvo", "--kv-offload"},
          {"-nkvo", "--no-kv-offload"},
-         string_format("whether to enable KV cache offloading (default: %s)", params.no_kv_offload ? "disabled" : "enabled"),
-@@ -2684,6 +2699,57 @@
-         ).set_env("LLAMA_ARG_RPC"));
-     }
-     add_opt(common_arg(
+@@ -2690,6 +2705,57 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             GGML_UNUSED(params);
+         }
+     ).set_env("LLAMA_ARG_RPC"));
++    add_opt(common_arg(
 +        {"-gs", "--guanaco-streaming"},
 +        {"-ngs", "--no-guanaco-streaming"},
 +        "deprecated alias for --load-mode streaming",
@@ -90,11 +93,10 @@
 +            params.guanaco_imatrix = value;
 +        }
 +    ).set_env("LLAMA_ARG_GUANACO_IMATRIX"));
-+    add_opt(common_arg(
+     add_opt(common_arg(
          {"-lm", "--load-mode"}, "MODE",
          "model loading mode (default: auto)\n"
-         "- auto: mmap, unless a device does not support it\n"
-@@ -2691,7 +2757,9 @@
+@@ -2698,7 +2764,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
          "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
          "- mlock: force system to keep model in RAM rather than swapping or compressing\n"
          "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
@@ -105,7 +107,7 @@
          [](common_params & params, const std::string & value) {
              /**/ if (value == "auto")       { params.load_mode = LLAMA_LOAD_MODE_AUTO;       }
              else if (value == "none")       { params.load_mode = LLAMA_LOAD_MODE_NONE;       }
-@@ -2699,6 +2767,7 @@
+@@ -2706,6 +2774,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              else if (value == "mlock")      { params.load_mode = LLAMA_LOAD_MODE_MLOCK;      }
              else if (value == "mmap+mlock") { params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK; }
              else if (value == "dio")        { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;  }

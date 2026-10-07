@@ -1,5 +1,7 @@
---- a/src/llama-kv-cache.cpp	2026-09-22 00:26:37.245259691 -0700
-+++ b/src/llama-kv-cache.cpp	2026-09-22 00:26:37.245297692 -0700
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 463510c..9902677 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
 @@ -4,6 +4,7 @@
  #include "llama-io.h"
  #include "llama-model.h"
@@ -8,7 +10,7 @@
  
  #include <algorithm>
  #include <cassert>
-@@ -58,6 +59,26 @@
+@@ -58,6 +59,26 @@ static void ggml_gen_hadamard(ggml_tensor * tensor) {
      }
  }
  
@@ -35,7 +37,7 @@
  //
  // llama_kv_cache
  //
-@@ -70,6 +91,7 @@
+@@ -70,6 +91,7 @@ llama_kv_cache::llama_kv_cache(
                       bool   v_trans,
                       bool   offload,
                       bool   unified,
@@ -43,7 +45,7 @@
                   uint32_t   kv_size,
                   uint32_t   n_seq_max,
                   uint32_t   n_pad,
-@@ -216,6 +238,11 @@
+@@ -216,6 +238,11 @@ llama_kv_cache::llama_kv_cache(
          if (offload) {
              auto * dev = model.dev_layer(il);
              buft = ggml_backend_dev_buffer_type(dev);
@@ -55,7 +57,7 @@
  
              dev_name = ggml_backend_dev_name(dev);
          }
-@@ -1412,7 +1439,6 @@
+@@ -1442,7 +1469,6 @@ ggml_tensor * llama_kv_cache::build_input_k_idxs(ggml_context * ctx, const llama
      ggml_tensor * k_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens);
  
      ggml_set_input(k_idxs);
@@ -63,7 +65,7 @@
  
      return k_idxs;
  }
-@@ -1429,7 +1455,6 @@
+@@ -1459,7 +1485,6 @@ ggml_tensor * llama_kv_cache::build_input_v_idxs(ggml_context * ctx, const llama
      }
  
      ggml_set_input(v_idxs);

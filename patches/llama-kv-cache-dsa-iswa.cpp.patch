@@ -1,6 +1,8 @@
---- a/src/llama-kv-cache-dsa-iswa.cpp	2026-09-22 00:26:37.257181555 -0700
-+++ b/src/llama-kv-cache-dsa-iswa.cpp	2026-09-22 00:26:37.257199008 -0700
-@@ -19,6 +19,7 @@
+diff --git a/src/llama-kv-cache-dsa-iswa.cpp b/src/llama-kv-cache-dsa-iswa.cpp
+index dc10342..818f0c5 100644
+--- a/src/llama-kv-cache-dsa-iswa.cpp
++++ b/src/llama-kv-cache-dsa-iswa.cpp
+@@ -19,6 +19,7 @@ llama_kv_cache_dsa_iswa::llama_kv_cache_dsa_iswa(
                       bool   offload,
                       bool   swa_full,
                       bool   unified,
@@ -8,7 +10,7 @@
                   uint32_t   kv_size,
                   uint32_t   n_seq_max,
                   uint32_t   n_ubatch,
-@@ -64,14 +65,14 @@
+@@ -64,14 +65,14 @@ llama_kv_cache_dsa_iswa::llama_kv_cache_dsa_iswa(
  
      kv_dsa = std::make_unique<llama_kv_cache_dsa>(
              model, type_k, type_v,

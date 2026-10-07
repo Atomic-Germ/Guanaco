@@ -1,6 +1,8 @@
---- a/src/llama-kv-cache-iswa.h	2026-09-22 00:26:37.266447655 -0700
-+++ b/src/llama-kv-cache-iswa.h	2026-09-22 00:26:37.266464016 -0700
-@@ -21,6 +21,7 @@
+diff --git a/src/llama-kv-cache-iswa.h b/src/llama-kv-cache-iswa.h
+index 7dab6ea..84da10b 100644
+--- a/src/llama-kv-cache-iswa.h
++++ b/src/llama-kv-cache-iswa.h
+@@ -21,6 +21,7 @@ public:
                           bool   offload,
                           bool   swa_full,
                           bool   unified,
@@ -8,7 +10,7 @@
                       uint32_t   kv_size,
                       uint32_t   n_seq_max,
                       uint32_t   n_ubatch,
-@@ -39,6 +40,7 @@
+@@ -39,6 +40,7 @@ public:
                           bool   offload,
                           bool   swa_full,
                           bool   unified,
