@@ -163,6 +163,15 @@ if(GUANACO_BUILD_EXAMPLES)
     target_link_libraries(guanaco_example guanaco)
 endif()
 
+# Phase-0 measurement probe for the dense pseudo-expert experiment. Off by
+# default; it only links llama.cpp and does not touch production code.
+option(GUANACO_BUILD_PROBES "Build Phase-0 measurement probes" OFF)
+if(GUANACO_BUILD_PROBES)
+    add_executable(tomoe_probe examples/tomoe_probe.cpp)
+    target_link_libraries(tomoe_probe PRIVATE llama-common llama Threads::Threads)
+    target_compile_features(tomoe_probe PRIVATE cxx_std_17)
+endif()
+
 if(GUANACO_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

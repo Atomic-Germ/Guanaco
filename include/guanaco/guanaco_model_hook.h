@@ -43,6 +43,29 @@ struct GUANACO_API GuanacoModelHook {
                                     size_t file_offset, size_t byte_size, int num_experts,
                                     void* mmap_base = nullptr) = 0;
     
+    // True when the loader is in dense layer-window streaming mode. Callers
+    // then register whole dense tensors via register_stream_tensor() instead of
+    // fused expert tensors.
+    virtual bool dense_streaming() const = 0;
+
+    // Register one whole dense weight tensor for layer-window streaming.
+    virtual void register_stream_tensor(const char* tensor_name, int layer_idx,
+                                    size_t file_offset, size_t byte_size, void* mmap_base) = 0;
+
+    // Private slab allocated for a registered dense stream tensor, or nullptr.
+    // llama.cpp points the ggml tensor's ->data at this address so the pager
+    // fully controls residency (DONTNEED on anonymous memory really evicts).
+    virtual void* get_stream_tensor_data(const char* tensor_name) = 0;
+
+    // Fill the fixed resident layer subset into slabs (called before the first
+    // token so the resident layers are warm).
+    virtual void fill_resident_layers() = 0;
+
+    // Called once per transformer layer (on the layer's "l_out" node) during
+    // dense streaming. Pages the next layers in and old layers out so only the
+    // configured byte budget stays resident.
+    virtual void on_layer_boundary(int layer_idx) = 0;
+    
     // Pointer to the slab allocated for a registered expert tensor.
     virtual void* get_expert_tensor_data(const char* tensor_name) = 0;
     

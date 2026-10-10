@@ -63,6 +63,31 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
         return loader->get_expert_tensor_data(tensor_name);
     }
 
+    bool dense_streaming() const override {
+        return loader && loader->dense_streaming();
+    }
+
+    void register_stream_tensor(const char* tensor_name, int layer_idx,
+                                 size_t file_offset, size_t byte_size,
+                                 void* mmap_base = nullptr) override {
+        if (!loader || !tensor_name) return;
+        loader->register_stream_tensor(tensor_name, layer_idx, file_offset, byte_size, mmap_base);
+    }
+
+    void* get_stream_tensor_data(const char* tensor_name) override {
+        if (!loader || !tensor_name) return nullptr;
+        return loader->get_stream_tensor_data(tensor_name);
+    }
+
+    void fill_resident_layers() override {
+        if (loader) loader->fill_resident_layers();
+    }
+
+    void on_layer_boundary(int layer_idx) override {
+        if (!loader) return;
+        loader->on_layer_boundary(layer_idx);
+    }
+
     void on_router_computed(int layer_idx, const int* expert_ids, int n) override {
         if (!loader || expert_ids == nullptr || n <= 0) return;
         loader->record_routing(layer_idx, expert_ids, n);
@@ -85,9 +110,11 @@ struct GuanacoModelHookImpl : public GuanacoModelHook {
     }
 
     std::vector<int> on_tensors_loaded() override {
-        // In-place mmap paging: no tensor-data redirection. Still seed the
-        // hot-expert pin pass from a sibling imatrix prior here.
+        // Dense slab streaming: fill the resident layer subset now that all
+        // tensors are registered and redirected, so the first token is warm.
+        // Still seed the hot-expert pin pass from a sibling imatrix prior.
         if (loader) {
+            loader->fill_resident_layers();
             loader->load_imatrix_prior(model_path);
         }
         return {};
