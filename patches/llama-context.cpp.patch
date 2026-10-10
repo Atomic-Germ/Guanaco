@@ -1,5 +1,5 @@
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 5f861f9..9a067d3 100644
+index 7e6974431..b488c6ed2 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -1,5 +1,6 @@
@@ -110,8 +110,8 @@ index 5f861f9..9a067d3 100644
              /*.swa_full  =*/ params.swa_full,
              /*.ctx_type  =*/ cparams.ctx_type,
              /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
-@@ -480,6 +545,10 @@ llama_context::llama_context(
-             }
+@@ -469,6 +534,10 @@ llama_context::llama_context(
+             moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
          }
  
 +        if (cparams.gpu_pill && getenv("GGML_OP_OFFLOAD_MIN_BATCH") == nullptr) {
@@ -121,7 +121,7 @@ index 5f861f9..9a067d3 100644
          sched_reserve();
  
          if (!cparams.flash_attn) {
-@@ -3901,6 +3970,7 @@ llama_context_params llama_context_default_params() {
+@@ -3876,6 +3945,7 @@ llama_context_params llama_context_default_params() {
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
          /*.moe_cache_size              =*/ 0,
@@ -129,7 +129,7 @@ index 5f861f9..9a067d3 100644
          /*.abort_callback              =*/ nullptr,
          /*.abort_callback_data         =*/ nullptr,
          /*.embeddings                  =*/ false,
-@@ -3918,13 +3988,49 @@ llama_context_params llama_context_default_params() {
+@@ -3893,13 +3963,56 @@ llama_context_params llama_context_default_params() {
  }
  
  llama_context * llama_init_from_model(
@@ -166,7 +166,14 @@ index 5f861f9..9a067d3 100644
 +            layer = atoi(dash + 1);
 +        }
 +        const int n = (int)(t->ne[0] * t->ne[1]); // n_expert_used * n_tokens
-+        hook->on_router_computed(layer, static_cast<const int *>(t->data), n);
++        if (n <= 0 || t->buffer == nullptr) {
++            return true;
++        }
++        // the router node can run on a device backend (op_offload), where
++        // t->data is not host-readable, so read the ids through the backend
++        std::vector<int> router_ids(n);
++        ggml_backend_tensor_get(t, router_ids.data(), 0, n * sizeof(int));
++        hook->on_router_computed(layer, router_ids.data(), n);
 +        return true;
 +    };
 +

@@ -1,5 +1,5 @@
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 9f05a66..390b797 100644
+index b3a0cf5d5..91ca185df 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1,5 +1,9 @@
@@ -12,7 +12,7 @@ index 9f05a66..390b797 100644
  #include "llama-arch.h"
  #include "llama-ext.h"
  #include "llama-hparams.h"
-@@ -1963,6 +1967,71 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1979,6 +1983,84 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
          }
      }
  
@@ -23,6 +23,7 @@ index 9f05a66..390b797 100644
 +    // expert slices into that slab before mul_mat_id runs.
 +    if (this->guanaco_hook != nullptr) {
 +        auto * hook = static_cast<guanaco::GuanacoModelHook *>(this->guanaco_hook);
++        bool warned_nonhost = false;
 +        for (auto & [ctx, buf_map] : ctx_buf_maps) {
 +            (void)buf_map;
 +            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
@@ -68,6 +69,18 @@ index 9f05a66..390b797 100644
 +                            __func__, name);
 +                    continue;
 +                }
++                // Streaming works in-place on the file-backed mmap, so only
++                // host-resident experts can be registered. Experts offloaded
++                // to a GPU have no valid host address; madvise on it would
++                // touch unrelated memory.
++                if (t->buffer == nullptr || !ggml_backend_buffer_is_host(t->buffer)) {
++                    if (!warned_nonhost) {
++                        fprintf(stderr, "%s: guanaco expert streaming inactive: expert tensors are not in host memory (buffer '%s'); use -ngl 0 so experts stay in the file mmap\n",
++                                __func__, t->buffer ? ggml_backend_buffer_name(t->buffer) : "(null)");
++                        warned_nonhost = true;
++                    }
++                    continue;
++                }
 +                // In-place mmap paging: keep ggml reading from the original
 +                // file-backed mmap address; guanaco streams experts via
 +                // madvise (DONTNEED/WILLNEED) using this address as the base.
@@ -84,7 +97,7 @@ index 9f05a66..390b797 100644
      if (use_mmap_buffer) {
          for (auto & mapping : ml.mappings) {
              pimpl->mappings.emplace_back(std::move(mapping));
-@@ -2403,6 +2472,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2424,6 +2506,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          !cparams.flash_attn,
                          cparams.offload_kqv,
                          cparams.kv_unified,
@@ -92,7 +105,7 @@ index 9f05a66..390b797 100644
                          cparams.n_ctx_seq,
                          cparams.n_seq_max,
                          1,
-@@ -2430,12 +2500,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2451,12 +2534,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              !cparams.flash_attn,
                              cparams.offload_kqv,
                              cparams.kv_unified,
@@ -107,7 +120,7 @@ index 9f05a66..390b797 100644
                              filter,
                              nullptr,
                              nullptr);
-@@ -2455,6 +2526,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2476,6 +2560,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              !cparams.flash_attn,
                              cparams.offload_kqv,
                              cparams.kv_unified,
@@ -115,7 +128,7 @@ index 9f05a66..390b797 100644
                              cparams.n_ctx_seq,
                              cparams.n_seq_max,
                              1,
-@@ -2505,6 +2577,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2526,6 +2611,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                      /* n_rs_seq          */ cparams.n_rs_seq,
                      /* offload           */ cparams.offload_kqv,
                      /* unified           */ cparams.kv_unified,
@@ -123,7 +136,7 @@ index 9f05a66..390b797 100644
                      /* filter_attn       */ std::move(filter_attn),
                      /* filter_recr       */ std::move(filter_recr),
                      /* filter_idx        */ std::move(filter_idx));
-@@ -2521,12 +2594,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2542,12 +2628,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              !cparams.flash_attn,
                              cparams.offload_kqv,
                              cparams.kv_unified,
@@ -138,7 +151,7 @@ index 9f05a66..390b797 100644
                              nullptr,
                              nullptr,
                              nullptr);
-@@ -2541,6 +2615,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2562,6 +2649,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              !cparams.flash_attn,
                              cparams.offload_kqv,
                              cparams.kv_unified,
@@ -146,7 +159,7 @@ index 9f05a66..390b797 100644
                              cparams.n_ctx_seq,
                              cparams.n_seq_max,
                              1,
-@@ -2568,12 +2643,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2589,12 +2677,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              !cparams.flash_attn,
                              cparams.offload_kqv,
                              cparams.kv_unified,
@@ -161,7 +174,7 @@ index 9f05a66..390b797 100644
                              filter,
                              nullptr,
                              nullptr);
-@@ -2593,6 +2669,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2614,6 +2703,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              cparams.offload_kqv,
                              params.swa_full,
                              cparams.kv_unified,
@@ -169,7 +182,7 @@ index 9f05a66..390b797 100644
                              cparams.n_ctx_seq,
                              cparams.n_seq_max,
                              cparams.n_ubatch,
-@@ -2619,11 +2696,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2640,11 +2730,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              cparams.offload_kqv,
                              params.swa_full,
                              cparams.kv_unified,
@@ -183,7 +196,7 @@ index 9f05a66..390b797 100644
                              filter_mtp,
                              nullptr,
                              nullptr);
-@@ -2636,6 +2714,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2657,6 +2748,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              cparams.offload_kqv,
                              params.swa_full,
                              cparams.kv_unified,
@@ -191,7 +204,7 @@ index 9f05a66..390b797 100644
                              cparams.n_ctx_seq,
                              cparams.n_seq_max,
                              cparams.n_ubatch,
-@@ -2659,11 +2738,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2680,11 +2772,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              cparams.offload_kqv,
                              params.swa_full,
                              cparams.kv_unified,
@@ -205,7 +218,7 @@ index 9f05a66..390b797 100644
                              nullptr,
                              nullptr,
                              nullptr);
-@@ -2756,6 +2836,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2777,6 +2870,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              /* n_rs_seq          */ cparams.n_rs_seq,
                              /* offload           */ cparams.offload_kqv,
                              /* unified           */ cparams.kv_unified,
@@ -213,7 +226,7 @@ index 9f05a66..390b797 100644
                              /* filter_attn       */ std::move(filter_attn),
                              /* filter_recr       */ std::move(filter_recr));
                      } else if (needs_mem_idx) {
-@@ -2776,6 +2857,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2797,6 +2891,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              /* n_rs_seq          */ cparams.n_rs_seq,
                              /* offload           */ cparams.offload_kqv,
                              /* unified           */ cparams.kv_unified,
@@ -221,7 +234,7 @@ index 9f05a66..390b797 100644
                              /* filter_attn       */ std::move(filter_attn),
                              /* filter_recr       */ std::move(filter_recr),
                              /* filter_idx        */ std::move(filter_idx));
-@@ -2796,6 +2878,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2817,6 +2912,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                              /* n_rs_seq          */ cparams.n_rs_seq,
                              /* offload           */ cparams.offload_kqv,
                              /* unified           */ cparams.kv_unified,
@@ -229,7 +242,7 @@ index 9f05a66..390b797 100644
                              /* filter_attn       */ std::move(filter_attn),
                              /* filter_recr       */ std::move(filter_recr));
                      }
-@@ -2854,6 +2937,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2875,6 +2971,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                                      cparams.offload_kqv,
                                      params.swa_full,
                                      cparams.kv_unified,
@@ -237,7 +250,7 @@ index 9f05a66..390b797 100644
                                      cparams.n_ctx_seq,
                                      cparams.n_seq_max,
                                      cparams.n_ubatch,
-@@ -2871,11 +2955,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2892,11 +2989,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                                      cparams.offload_kqv,
                                      params.swa_full,
                                      cparams.kv_unified,
@@ -251,7 +264,7 @@ index 9f05a66..390b797 100644
                                      filter,
                                      reuse,
                                      share);
-@@ -2891,12 +2976,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2912,12 +3010,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                                  !cparams.flash_attn,
                                  cparams.offload_kqv,
                                  cparams.kv_unified,
@@ -266,7 +279,7 @@ index 9f05a66..390b797 100644
                                  filter,
                                  nullptr,
                                  nullptr);
-@@ -2951,6 +3037,13 @@ llama_model_params llama_model_default_params() {
+@@ -2972,6 +3071,13 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -280,7 +293,7 @@ index 9f05a66..390b797 100644
          /*.load_mtp                    =*/ false,
      };
  
-@@ -3401,6 +3494,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
+@@ -3422,6 +3528,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
      TENSOR_ALLOW_RESHAPE  (llama_model_loader::TENSOR_ALLOW_RESHAPE),
      TENSOR_READ_LAZY      (llama_model_loader::TENSOR_READ_LAZY) {}
  

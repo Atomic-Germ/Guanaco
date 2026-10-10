@@ -37,6 +37,8 @@ static void guanaco_scan_router_nodes(const struct ggml_cgraph * g) {
         // not yet allocated (t->data == nullptr). Skip those - we only want
         // the router output of a real, allocated graph compute.
         if (t->data == nullptr) continue;
+        // device buffers use a placeholder data pointer that is not readable
+        if (t->buffer == nullptr || !ggml_backend_buffer_is_host(t->buffer)) continue;
         const char * name = ggml_get_name(t);
         if (name == nullptr || strncmp(name, "ffn_moe_topk", 12) != 0) continue;
         int layer = -1;
