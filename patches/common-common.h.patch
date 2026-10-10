@@ -1,5 +1,5 @@
 diff --git a/common/common.h b/common/common.h
-index 6f8acf3..bfd7276 100644
+index d89f803..6b9ca82 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -485,6 +485,9 @@ struct common_params {
@@ -12,7 +12,7 @@ index 6f8acf3..bfd7276 100644
      enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
      enum llama_load_mode  load_mode  = LLAMA_LOAD_MODE_AUTO; // how to load the model
  
-@@ -588,6 +591,16 @@ struct common_params {
+@@ -588,6 +591,18 @@ struct common_params {
      bool no_host           = false; // bypass host buffer allowing extra buffers to be used
      bool load_mtp          = false; // load MTP/NextN layers
  
@@ -24,6 +24,8 @@ index 6f8acf3..bfd7276 100644
 +    bool   guanaco_pilot         = true;  // cross-layer lookahead prefetch
 +    float  guanaco_pilot_mass    = 0.9f;  // pilot prefetch pruning mass fraction
 +    bool   guanaco_imatrix       = true;  // seed hot pins from <model>.imatrix.gguf
++    int32_t guanaco_dense_budget_mb = 0;  // dense layer-window RAM budget in MiB (0 = off)
++    int32_t guanaco_dense_ahead     = 3;  // dense streaming: layers to prefetch ahead
 +    std::string guanaco_affinity = "";    // expert-affinity warmup prompt (empty = disabled)
 +
      bool single_turn       = false; // single turn chat conversation

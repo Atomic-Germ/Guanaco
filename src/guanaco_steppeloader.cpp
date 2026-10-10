@@ -2,6 +2,7 @@
 #include "gguf.h"
 #include "ggml-backend.h"
 #include <cstring>
+#include <cstdlib>
 #include <algorithm>
 #include <iostream>
 #include <unordered_set>
@@ -13,6 +14,7 @@
 #include <dirent.h>
 #include <utility>
 #include <string>
+#include <chrono>
 
 // imatrix prior: reuse llama.cpp's common loader to read a sibling
 // "<model>.imatrix.gguf". It exposes, per expert tensor, a `counts`
@@ -22,6 +24,7 @@
 namespace guanaco {
 
 SteppeLoader::SteppeLoader(const SteppeLoaderConfig& config) : config_(config) {
+    dense_budget_bytes_ = config_.dense_budget_bytes;
 #ifdef GUANACO_HAVE_IO_URING
     if (config_.use_io_uring) {
         uring_slab_ = io_uring_slab_create(config_.io_queue_depth);
@@ -71,6 +74,18 @@ void SteppeLoader::shutdown() {
         kv.second.mmap_base = nullptr;
     }
     expert_tensors_.clear();
+
+    // Dense slabs are private anonymous mappings owned by the loader.
+    for (auto& kv : stream_layers_) {
+        for (auto& t : kv.second) {
+            if (t.slab != nullptr && t.slab_len != 0) {
+                munmap(t.slab, t.slab_len);
+                t.slab = nullptr;
+                t.slab_len = 0;
+            }
+        }
+    }
+    stream_layers_.clear();
 
     if (fd_ >= 0) {
         close(fd_);
@@ -183,10 +198,10 @@ static struct gguf_context* read_gguf_metadata_ctx(const std::string& shard) {
 }
 
 bool SteppeLoader::parse_gguf_manifest() {
-    // Dense model: nothing to stream. Skip the whole scan (and avoid emitting
-    // the misleading "Parsed N expert tensors" line for a non-MoE model).
-    if (!enabled_) {
-        std::cerr << "[Guanaco Storage] Skipping expert manifest (streaming disabled)\n";
+    // Nothing to stream (dense without a budget): skip the whole scan (and
+    // avoid emitting the misleading "Parsed N expert tensors" line).
+    if (!enabled_ && !dense_enabled_) {
+        std::cerr << "[Guanaco Storage] Skipping tensor manifest (streaming disabled)\n";
         return true;
     }
 
@@ -259,6 +274,20 @@ bool SteppeLoader::parse_gguf_manifest() {
                 tensor_type = (name_str.find("gate") != std::string::npos) ? 2 : 0;
             }
 
+            // Dense layer-window streaming: track every transformer block
+            // weight (skip tiny per-layer norms) so the window pager can page
+            // whole layers. These entries go to manifest_ only, for offset
+            // lookup by the tensor-data registration hook.
+            if (dense_enabled_ && name_str.rfind("blk.", 0) == 0) {
+                char * endp = nullptr;
+                long L = strtol(name_str.c_str() + 4, &endp, 10);
+                if (endp != name_str.c_str() + 4 && *endp == '.' &&
+                    name_str.find(".weight") != std::string::npos &&
+                    name_str.find("norm") == std::string::npos) {
+                    layer_idx = (int) L;
+                }
+            }
+
             // Only treat a tensor as a real MoE expert block if its trailing
             // dim is a genuine expert count. A dense FFN tensor (trailing
             // dim = hidden_size) would otherwise be mis-parsed as one giant
@@ -296,15 +325,29 @@ bool SteppeLoader::parse_gguf_manifest() {
                 }
 
                 manifest_.push_back(std::move(entry));
-                layer_experts_[layer_idx].push_back(manifest_.back());
+                // layer_experts_ drives the MoE prefetch path, which is off in
+                // dense mode; keep it empty there.
+                if (enabled_) {
+                    layer_experts_[layer_idx].push_back(manifest_.back());
+                }
             }
         }
 
         gguf_free(ctx);
     }
 
-    std::cerr << "[Guanaco Storage] Parsed " << manifest_.size() << " expert tensors across "
-              << layer_experts_.size() << " layers (from " << shards.size() << " shard(s))\n";
+    // In dense mode manifest_ holds whole-block weight tensors (not experts),
+    // keyed by layer for the window pager.
+    std::unordered_set<int> dense_layers;
+    if (dense_enabled_) {
+        for (const auto& e : manifest_) {
+            if (e.layer_idx >= 0) dense_layers.insert(e.layer_idx);
+        }
+    }
+    std::cerr << "[Guanaco Storage] Parsed " << manifest_.size()
+              << (dense_enabled_ ? " weight tensors across " : " expert tensors across ")
+              << (dense_enabled_ ? (int) dense_layers.size() : (int) layer_experts_.size())
+              << " layers (from " << shards.size() << " shard(s))\n";
 
     return true;
 }
@@ -499,13 +542,21 @@ bool SteppeLoader::parse_gguf_metadata() {
               << ", layers=" << model_config_.num_hidden_layers
               << ", hidden=" << model_config_.hidden_size << std::endl;
 
-    // Dense model (or expert count unknown): there is nothing to stream.
-    // Disable streaming so we never mistake a dense FFN tensor for a 1-expert
-    // block and thrash / corrupt the run. ggml's normal mmap is used instead.
+    // Dense model (or expert count unknown): there is no routing to exploit.
+    // If a byte budget was given, switch to layer-window streaming; otherwise
+    // disable streaming so we never mistake a dense FFN tensor for a
+    // 1-expert block. ggml's normal mmap is used in the disabled case.
     if (model_config_.num_experts <= 1) {
         enabled_ = false;
-        std::cerr << "[Guanaco Storage] No MoE experts detected (experts="
-                  << model_config_.num_experts << ") - disabling Guanaco disk streaming (passthrough)\n";
+        if (config_.dense_streaming && config_.dense_budget_bytes > 0) {
+            dense_enabled_ = true;
+            std::cerr << "[Guanaco Storage] Dense model: layer-window streaming enabled (budget="
+                      << (config_.dense_budget_bytes / (1024 * 1024)) << " MB, prefetch ahead="
+                      << config_.dense_prefetch_ahead << " layers)\n";
+        } else {
+            std::cerr << "[Guanaco Storage] No MoE experts detected (experts="
+                      << model_config_.num_experts << ") - disabling Guanaco disk streaming (passthrough)\n";
+        }
     }
 
     return true;
@@ -636,6 +687,413 @@ const ExpertManifestEntry* SteppeLoader::lookup_expert(const std::string& name) 
         }
     }
     return nullptr;
+}
+
+// madvise() requires page-aligned addresses. Slabs are page-aligned by
+// construction, but the helper keeps the call sites uniform and tolerates any
+// infra-page base.
+static int madvise_range(void* base, size_t size, int advice) {
+    if (base == nullptr || size == 0) return 0;
+    const size_t page = (size_t) sysconf(_SC_PAGESIZE);
+    uintptr_t addr  = (uintptr_t) base;
+    uintptr_t start = addr & ~(uintptr_t)(page - 1);
+    uintptr_t end   = (addr + size + page - 1) & ~(uintptr_t)(page - 1);
+    return madvise((void*) start, (size_t)(end - start), advice);
+}
+
+static size_t page_align(size_t n) {
+    const size_t page = (size_t) sysconf(_SC_PAGESIZE);
+    return (n + page - 1) & ~(page - 1);
+}
+
+void* SteppeLoader::alloc_slab(size_t byte_size) {
+    const size_t len = page_align(byte_size == 0 ? 1 : byte_size);
+    void* p = mmap(nullptr, len, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        ++dense_lock_fails_;
+        return nullptr;
+    }
+#ifdef MADV_HUGEPAGE
+    // Back the slab with transparent huge pages. A streamed layer is refilled
+    // whole on every pass, so cutting the fault count by the huge-page factor
+    // removes most of the per-pass zero-fill overhead.
+    madvise(p, len, MADV_HUGEPAGE);
+#endif
+    return p;
+}
+
+void SteppeLoader::register_stream_tensor(const std::string& name, int layer,
+                                          size_t file_offset, size_t byte_size, void* mmap_base) {
+    if (!dense_enabled_ || fd_ < 0 || byte_size == 0 || layer < 0) {
+        return;
+    }
+    auto& vec = stream_layers_[layer];
+    for (const auto& t : vec) {
+        if (t.name == name) return; // already registered
+    }
+    StreamTensor t;
+    t.name        = name;
+    t.layer       = layer;
+    t.file_offset = file_offset;
+    t.byte_size   = byte_size;
+    t.mmap_base   = mmap_base;
+    if (config_.dense_use_slab) {
+        t.slab     = alloc_slab(byte_size);
+        t.slab_len = t.slab ? page_align(byte_size) : 0;
+    }
+    vec.push_back(std::move(t));
+    stream_total_bytes_ += byte_size;
+    if (layer + 1 > stream_n_layers_) {
+        stream_n_layers_ = layer + 1;
+        layer_resident_.resize((size_t)stream_n_layers_, 0);
+    }
+}
+
+void* SteppeLoader::get_stream_tensor_data(const std::string& name) {
+    for (auto& kv : stream_layers_) {
+        for (auto& t : kv.second) {
+            if (t.name == name) return t.slab;
+        }
+    }
+    return nullptr;
+}
+
+// pread()/io_uring reads leave a clean copy of the tensor in the page cache.
+// Under a cgroup cap those copies force continuous reclaim (system-time
+// churn), so drop them. Dense tensors no longer fault through the file mmap,
+// so this cannot race with the compute path.
+static void fadvise_drop(int fd, const std::vector<StreamTensor>& tensors) {
+    for (const auto& t : tensors) {
+        if (t.byte_size != 0) {
+            posix_fadvise(fd, (off_t)t.file_offset, (off_t)t.byte_size, POSIX_FADV_DONTNEED);
+        }
+    }
+}
+
+// Read a whole layer's tensors into their slabs. Synchronous: the batch is
+// submitted to io_uring (or read with pread when io_uring is unavailable) and
+// reaped before returning, so the caller can rely on the slab being filled.
+void SteppeLoader::prefetch_layer(int layer) {
+    auto it = stream_layers_.find(layer);
+    if (it == stream_layers_.end()) return;
+    if (layer < (int)layer_resident_.size() && layer_resident_[layer]) return;
+    ++dense_prefetch_ops_;
+
+    const auto io_t0 = std::chrono::steady_clock::now();
+
+#ifdef GUANACO_HAVE_IO_URING
+    if (config_.dense_use_slab && uring_slab_ != nullptr) {
+        std::vector<IoUringSlice> slices;
+        slices.reserve(it->second.size());
+        for (const auto& t : it->second) {
+            if (t.slab == nullptr || t.byte_size == 0 || t.byte_size > UINT32_MAX) continue;
+            slices.push_back({t.slab, t.byte_size, (int64_t)t.file_offset});
+        }
+        if (!slices.empty() && io_uring_slab_read(uring_slab_, fd_, slices)) {
+            ++dense_uring_ops_;
+            if (layer < (int)layer_resident_.size()) layer_resident_[layer] = 1;
+            fadvise_drop(fd_, it->second);
+            dense_io_seconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_t0).count();
+            return;
+        }
+        // fall through to pread on partial failure
+    }
+#endif
+
+    ++dense_pread_ops_;
+    for (const auto& t : it->second) {
+        if (t.slab != nullptr && t.byte_size != 0) {
+            size_t done = 0;
+            while (done < t.byte_size) {
+                const ssize_t r = pread(fd_, (char*)t.slab + done, t.byte_size - done,
+                                        (off_t)(t.file_offset + done));
+                if (r <= 0) break;
+                done += (size_t)r;
+            }
+        } else if (t.mmap_base != nullptr) {
+            madvise_range(t.mmap_base, t.byte_size, MADV_WILLNEED);
+        }
+    }
+    fadvise_drop(fd_, it->second);
+    if (layer < (int)layer_resident_.size()) layer_resident_[layer] = 1;
+    dense_io_seconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_t0).count();
+}
+
+// Queue a streamed layer's slab reads into io_uring without waiting, so the
+// kernel fills the slabs while the caller computes the previous layers. Returns
+// false when io_uring is unavailable or the queue could not take the whole
+// layer (the caller then reads it synchronously).
+bool SteppeLoader::submit_layer_async(int layer) {
+#ifdef GUANACO_HAVE_IO_URING
+    if (!config_.dense_use_slab || uring_slab_ == nullptr) return false;
+    auto it = stream_layers_.find(layer);
+    if (it == stream_layers_.end()) return false;
+    if (layer < (int)layer_resident_.size() && layer_resident_[layer]) return true;
+    if (dense_inflight_.count(layer)) return true;
+    std::vector<IoUringSlice> slices;
+    slices.reserve(it->second.size());
+    for (const auto& t : it->second) {
+        if (t.slab == nullptr || t.byte_size == 0 || t.byte_size > UINT32_MAX) continue;
+        slices.push_back({t.slab, t.byte_size, (int64_t)t.file_offset});
+    }
+    if (slices.empty()) return false;
+    const int n = io_uring_slab_submit(uring_slab_, fd_, slices, (int64_t)layer);
+    if (n != (int)slices.size()) {
+        // Partial queue: drain what we queued and let the caller read sync.
+        for (int k = 0; k < n; ++k) {
+            int64_t tok = 0;
+            int res = 0;
+            if (!io_uring_slab_reap(uring_slab_, &tok, &res)) break;
+        }
+        return false;
+    }
+    dense_inflight_[layer] = n;
+    ++dense_uring_ops_;
+    return true;
+#else
+    (void) layer;
+    return false;
+#endif
+}
+
+// Make a streamed layer resident before it is computed. In steady state its
+// read was queued `ahead` boundaries ago, so this just reaps completions. A cold
+// pipeline (first tail layer of a pass) falls back to a synchronous read.
+void SteppeLoader::ensure_layer(int layer) {
+    if (layer < (int)layer_resident_.size() && layer_resident_[layer]) return;
+#ifdef GUANACO_HAVE_IO_URING
+    if (uring_slab_ != nullptr && dense_inflight_.count(layer)) {
+        ++dense_wait_ops_;
+        const auto t0 = std::chrono::steady_clock::now();
+        bool all_ok = true;
+        auto g = dense_inflight_.find(layer);
+        while (g != dense_inflight_.end() && g->second > 0) {
+            int64_t tok = 0;
+            int res = 0;
+            if (!io_uring_slab_reap(uring_slab_, &tok, &res)) { all_ok = false; break; }
+            if (res < 0) all_ok = false;
+            auto h = dense_inflight_.find((int)tok);
+            if (h != dense_inflight_.end()) {
+                if (--h->second <= 0) {
+                    dense_inflight_.erase(h);
+                }
+            }
+            g = dense_inflight_.find(layer);
+        }
+        if (all_ok) {
+            if (layer < (int)layer_resident_.size()) layer_resident_[layer] = 1;
+            auto it = stream_layers_.find(layer);
+            if (it != stream_layers_.end()) fadvise_drop(fd_, it->second);
+            dense_io_seconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            return;
+        }
+        // Read error: fall through and redo the layer synchronously.
+        dense_inflight_.erase(layer);
+    }
+#endif
+    prefetch_layer(layer);
+}
+
+// Reap every outstanding io_uring completion. Called at a pass boundary so a
+// new pass never reuses a slab whose read is still in flight.
+void SteppeLoader::drain_inflight() {
+#ifdef GUANACO_HAVE_IO_URING
+    if (uring_slab_ != nullptr) {
+        while (!dense_inflight_.empty()) {
+            int64_t tok = 0;
+            int res = 0;
+            if (!io_uring_slab_reap(uring_slab_, &tok, &res)) break;
+            auto h = dense_inflight_.find((int)tok);
+            if (h != dense_inflight_.end()) {
+                if (--h->second <= 0) dense_inflight_.erase(h);
+            }
+        }
+    }
+#endif
+    dense_inflight_.clear();
+}
+
+// Eviction advice for streamed slabs.
+//
+// MADV_FREE keeps the pages resident when memory is free, so a layer evicted on
+// one pass can still be served from RAM on the next (cheaper refill, no
+// zero-fill). But the cgroup still counts those pages: under a tight cap they
+// crowd out the working set and pin memory.current at the limit, so every
+// allocation pays synchronous direct reclaim (visible as huge system time and
+// disk re-reads).
+//
+// MADV_DONTNEED frees immediately (the refill pays a zero-fill) and keeps the
+// cgroup well under the cap, which wins when the cap is tight.
+//
+// Default is adaptive: MADV_FREE while the cgroup has headroom, MADV_DONTNEED
+// once it approaches the limit. GUANACO_DENSE_EVICT=free|dontneed pins a mode.
+enum class DenseEvictMode { Auto, Free, DontNeed };
+
+static DenseEvictMode dense_evict_mode() {
+    static const DenseEvictMode m = [] {
+        const char* e = getenv("GUANACO_DENSE_EVICT");
+        if (e != nullptr && std::strcmp(e, "free") == 0)     return DenseEvictMode::Free;
+        if (e != nullptr && std::strcmp(e, "dontneed") == 0) return DenseEvictMode::DontNeed;
+        return DenseEvictMode::Auto;
+    }();
+    return m;
+}
+
+// Read this process's cgroup v2 memory.current / memory.max once, so the
+// adaptive eviction can tell whether it is close to the limit.
+struct CgroupPaths {
+    std::string current;
+    std::string max;
+    bool valid = false;
+};
+
+static const CgroupPaths& cgroup_paths() {
+    static const CgroupPaths c = [] {
+        CgroupPaths p;
+        int fd = open("/proc/self/cgroup", O_RDONLY);
+        if (fd < 0) return p;
+        char buf[512] = {0};
+        const ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        if (n <= 0) return p;
+        // line: "0::/path/to/scope"
+        const char* p2 = std::strstr(buf, "0::");
+        if (p2 == nullptr) return p;
+        p2 += 3;
+        const char* nl = std::strchr(p2, '\n');
+        std::string dir = "/sys/fs/cgroup";
+        dir.append(p2, nl ? (size_t)(nl - p2) : std::strlen(p2));
+        p.current = dir + "/memory.current";
+        p.max     = dir + "/memory.max";
+        struct stat st;
+        p.valid = stat(p.current.c_str(), &st) == 0;
+        return p;
+    }();
+    return c;
+}
+
+static bool read_ull(const std::string& path, unsigned long long* out) {
+    int fd = open(path.c_str(), O_RDONLY);
+    if (fd < 0) return false;
+    char buf[64] = {0};
+    const ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return false;
+    if (std::strncmp(buf, "max", 3) == 0) return false;
+    *out = strtoull(buf, nullptr, 10);
+    return true;
+}
+
+static bool cgroup_near_limit() {
+    const CgroupPaths& c = cgroup_paths();
+    if (!c.valid) return false;
+    unsigned long long cur = 0, max = 0;
+    if (!read_ull(c.current, &cur) || !read_ull(c.max, &max) || max == 0) return false;
+    return cur * 10 >= max * 9; // >= 90% of the cap
+}
+
+static int dense_evict_advice() {
+    switch (dense_evict_mode()) {
+        case DenseEvictMode::Free:     return MADV_FREE;
+        case DenseEvictMode::DontNeed: return MADV_DONTNEED;
+        default: return cgroup_near_limit() ? (int) MADV_DONTNEED : (int) MADV_FREE;
+    }
+}
+
+static const char* dense_evict_name() {
+    switch (dense_evict_mode()) {
+        case DenseEvictMode::Free:     return "free";
+        case DenseEvictMode::DontNeed: return "dontneed";
+        default: return "auto";
+    }
+}
+
+// Drop the layer's slabs. Both advice modes really free anonymous pages (unlike
+// the shared file mmap, where DONTNEED is a no-op). The bytes are whole-tensor
+// copies, so this never touches weights.
+void SteppeLoader::evict_layer(int layer) {
+    auto it = stream_layers_.find(layer);
+    if (it == stream_layers_.end()) return;
+    if (layer < (int)layer_resident_.size() && !layer_resident_[layer]) return;
+    ++dense_evict_ops_;
+    const int advice = dense_evict_advice();
+    for (const auto& t : it->second) {
+        if (t.slab != nullptr && t.slab_len != 0) {
+            madvise_range(t.slab, t.slab_len, advice);
+        } else if (t.mmap_base != nullptr) {
+            madvise_range(t.mmap_base, t.byte_size, MADV_DONTNEED);
+        }
+    }
+    if (layer < (int)layer_resident_.size()) layer_resident_[layer] = 0;
+}
+
+void SteppeLoader::fill_resident_layers() {
+    if (!dense_enabled_ || stream_layers_.empty()) return;
+    const int n_layers = stream_n_layers_;
+    size_t avg_layer = (n_layers > 0) ? stream_total_bytes_ / (size_t)n_layers : 0;
+    int w = n_layers;
+    if (dense_budget_bytes_ > 0 && avg_layer > 0) {
+        w = (int)(dense_budget_bytes_ / avg_layer);
+    }
+    if (w < 1) w = 1; // the first forward pass needs layer 0 resident
+    if (w > n_layers) w = n_layers;
+    stream_resident_layers_ = w;
+    for (int L = 0; L < w; ++L) {
+        prefetch_layer(L);
+    }
+    std::cerr << "[Guanaco Pager] resident subset: " << w << "/" << n_layers
+              << " layers (" << (dense_budget_bytes_ / (1024*1024)) << " MB budget)\n";
+}
+
+void SteppeLoader::on_layer_boundary(int layer) {
+    if (!dense_enabled_ || stream_layers_.empty() || layer < 0) return;
+
+    // Layers fire 0..N-1 within one forward pass, then restart at 0 for the
+    // next pass. A non-increasing layer means a new pass started.
+    if (layer <= last_boundary_layer_) {
+        last_boundary_layer_ = -1;
+        // Restart the async submit frontier at the resident subset edge.
+        drain_inflight();
+        submitted_upto_ = stream_resident_layers_ - 1;
+    }
+    last_boundary_layer_ = layer;
+
+    const int n_layers = stream_n_layers_;
+    if (layer >= n_layers) return;
+
+    // The fixed resident subset [0, W) is filled once (fill_resident_layers)
+    // and never evicted. Only the streamed tail [W, n) is paged per token.
+    const int w = stream_resident_layers_;
+    int ahead = config_.dense_prefetch_ahead;
+    if (ahead < 1) ahead = 1;
+
+    ++dense_boundaries_;
+
+    // Keep the async pipeline full: queue streamed layers up to `ahead` past
+    // the current one. Each layer is queued once; its read completes while the
+    // layers in between are computed.
+    const int target = layer + ahead;
+    for (int k = submitted_upto_ + 1; k <= target && k < n_layers; ++k) {
+        if (k >= w) {
+            submit_layer_async(k);
+        }
+        submitted_upto_ = k;
+    }
+
+    // The next layer is computed as soon as this callback returns, so make it
+    // resident. In steady state its read was queued `ahead` boundaries ago and
+    // this reaps cheaply; only a cold pipeline reads synchronously.
+    const int next = layer + 1;
+    if (next >= w && next < n_layers) {
+        ensure_layer(next);
+    }
+
+    // The layer just computed will not be needed again until the next pass;
+    // drop its slabs now to keep the streamed footprint at `ahead` layers.
+    if (layer >= w && layer < n_layers && layer < (int)layer_resident_.size() && layer_resident_[layer]) {
+        evict_layer(layer);
+    }
 }
 
 void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
@@ -1152,7 +1610,25 @@ void SteppeLoader::log_pin_rate() {
 void SteppeLoader::log_final_summary() {
     // Only emit after real work; the hook is also destroyed transiently
     // during model-fit before any expert runs, which would print noise.
-    if (prefetch_calls_ == 0) return;
+    if (prefetch_calls_ == 0 && dense_boundaries_ == 0) return;
+
+    if (dense_enabled_) {
+        const size_t mib = stream_total_bytes_ / (1024 * 1024);
+        std::cerr << "[Guanaco Pager] final: dense slab-stream, "
+                  << stream_layers_.size() << " layers / " << mib << " MB, "
+                  << "resident=" << stream_resident_layers_ << " layers, "
+                  << dense_boundaries_ << " boundaries, "
+                  << dense_prefetch_ops_ << " prefetches, "
+                  << dense_evict_ops_ << " evictions, "
+                  << dense_lock_fails_ << " slab-allocs-failed, "
+                  << dense_uring_ops_ << " uring / " << dense_pread_ops_ << " pread, "
+                  << "io=" << (long)dense_io_seconds_ << "s"
+                  << ", ahead=" << config_.dense_prefetch_ahead
+                  << ", evict=" << dense_evict_name()
+                  << ", waits=" << dense_wait_ops_
+                  << "\n";
+        return;
+    }
 
     const uint64_t total = pin_hits_ + warm_hits_ + disk_miss_;
     const uint64_t resident = pin_hits_ + warm_hits_;

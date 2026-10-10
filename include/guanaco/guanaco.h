@@ -94,6 +94,32 @@ struct GUANACO_API SteppeLoaderConfig {
     bool use_imatrix = true;   // seed hot pins from "<model>.imatrix.gguf" prior
     bool dontneed = true;      // madvise(DONTNEED) slab slices after copy (drop page-cache)
     size_t io_queue_depth = 256;
+
+    // Dense layer-window streaming. For a dense model (no MoE experts) there is
+    // no routing, so instead of a per-expert cache we keep a sliding window of
+    // transformer layers resident and page the rest in from disk. Only active
+    // when dense_budget_bytes > 0; otherwise dense models keep the plain mmap.
+    bool   dense_streaming    = false;
+    size_t dense_budget_bytes = 0;   // RAM budget for the resident layer window
+    int    dense_prefetch_ahead = 3; // layers to WILLNEED ahead of the current one
+    // Read dense tensors into private anonymous slabs (DONTNEED actually frees
+    // them). When false, fall back to in-place madvise on the shared mmap.
+    bool   dense_use_slab = true;
+};
+
+// One whole dense weight tensor registered for layer-window streaming. Unlike
+// ExpertTensor there is no routing: the whole tensor is read into a private
+// anonymous slab and residency is controlled per layer by DONTNEED/WILLNEED
+// (DONTNEED actually frees the slab pages, unlike on the shared file mmap).
+// ggml reads the tensor via a redirected t->data pointer into `slab`.
+struct GUANACO_API StreamTensor {
+    std::string name;
+    int    layer       = -1;
+    size_t file_offset = 0;
+    size_t byte_size   = 0;
+    void * mmap_base   = nullptr;   // original file-backed mmap address (fallback)
+    void * slab        = nullptr;   // private anon slab the tensor is read into
+    size_t slab_len    = 0;         // page-rounded slab length in bytes
 };
 
 struct GUANACO_API MoEModelConfig {
@@ -123,6 +149,24 @@ public:
     void register_expert_tensor(const std::string& name, int layer,
                               size_t file_offset, size_t byte_size, int num_experts,
                               void* mmap_base = nullptr);
+
+    // Dense layer-window streaming (no MoE routing). Register a whole dense
+    // weight tensor; on_layer_boundary() pages whole layers in and out with
+    // madvise so only dense_budget_bytes worth of layers stay resident.
+    void register_stream_tensor(const std::string& name, int layer,
+                              size_t file_offset, size_t byte_size, void* mmap_base);
+    void on_layer_boundary(int layer);
+    bool dense_streaming() const { return dense_enabled_; }
+
+    // Pointer to the slab allocated for a registered dense stream tensor, or
+    // nullptr if the tensor was not registered / has no slab. llama.cpp points
+    // the ggml tensor's ->data at this address after registration.
+    void* get_stream_tensor_data(const std::string& name);
+
+    // Read the fixed resident subset of layers ([0, W)) into their slabs.
+    // Called once after all dense tensors are registered so the first token
+    // finds its weights resident.
+    void fill_resident_layers();
 
     // Pointer to the mmap base recorded for a registered expert tensor.
     void*  get_expert_tensor_data(const std::string& name);
@@ -193,6 +237,38 @@ private:
     // below becomes a no-op, so ggml uses its normal mmap and the model just
     // runs. This prevents mis-parsing a dense FFN tensor as a 1-"expert" block.
     bool enabled_ = true;
+
+    // Dense layer-window streaming state. Populated only when the model has no
+    // MoE experts and dense_budget_bytes > 0.
+    bool dense_enabled_ = false;
+    std::unordered_map<int, std::vector<StreamTensor>> stream_layers_; // whole tensors per layer
+    std::vector<char> layer_resident_;      // per-layer residency bookkeeping (window)
+    size_t stream_total_bytes_ = 0;         // sum of registered dense tensor bytes
+    size_t dense_budget_bytes_ = 0;         // resident layer-window budget in bytes
+    int    stream_n_layers_    = 0;         // highest registered layer + 1
+    int    last_boundary_layer_ = -1;       // last l_out layer seen (new-pass detection)
+    int    dense_boundaries_   = 0;         // on_layer_boundary calls that did work
+    long   dense_prefetch_ops_ = 0;         // layers read into slabs
+    long   dense_evict_ops_    = 0;         // layers DONTNEED'd back out
+    long   dense_lock_fails_   = 0;         // slab allocation failures
+    long   dense_uring_ops_    = 0;         // layers read via io_uring
+    long   dense_pread_ops_    = 0;         // layers read via pread fallback
+    double dense_io_seconds_   = 0.0;       // cumulative time in slab reads
+    int    stream_resident_layers_ = 0;     // fixed resident subset size W (layers [0,W))
+    long   dense_wait_ops_     = 0;         // ensure_layer calls that had to wait
+    int    submitted_upto_     = -1;        // highest streamed layer queued to io_uring
+
+    void prefetch_layer(int layer);
+    void evict_layer(int layer);
+    void* alloc_slab(size_t byte_size);
+    // Submit a layer's slab reads to io_uring without waiting. Returns false if
+    // io_uring is unavailable or the submit failed (caller falls back to sync).
+    bool submit_layer_async(int layer);
+    // Make sure a streamed layer is resident before it is computed, reaping its
+    // in-flight io_uring reads if needed. Synchronous only on a cold pipeline.
+    void ensure_layer(int layer);
+    void drain_inflight();
+    std::unordered_map<int, int> dense_inflight_; // layer -> outstanding completions
 
 #ifdef GUANACO_HAVE_IO_URING
     void* uring_slab_ = nullptr;  // batched io_uring reader for slab prefetch
@@ -398,6 +474,11 @@ struct IoUringSlice { void* dst; size_t len; int64_t offset; };
 void* io_uring_slab_create(unsigned entries);
 void  io_uring_slab_destroy(void* ctx);
  bool  io_uring_slab_read(void* ctx, int fd, const std::vector<IoUringSlice>& slices);
+// Async split: queue the slices tagged with `token` and return the number
+// queued (or -1 on error) without waiting; reap one completion at a time with
+// io_uring_slab_reap. Lets the caller overlap reads with compute.
+int  io_uring_slab_submit(void* ctx, int fd, const std::vector<IoUringSlice>& slices, int64_t token);
+bool io_uring_slab_reap(void* ctx, int64_t* token, int* res);
 #endif
 
 } // namespace guanaco

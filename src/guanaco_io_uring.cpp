@@ -7,10 +7,9 @@
 namespace guanaco {
 
 // Batched io_uring reader for slab prefetch. One ring instance is created
-// per SteppeLoader; prefetch_experts() submits every selected expert slice
-// for a layer in a single batch and reaps the completions together. This
-// lets the kernel dispatch the NVMe reads in parallel and avoids N separate
-// pread() syscalls.
+// per SteppeLoader; a layer's slices are submitted in one batch and reaped
+// together. This lets the kernel dispatch the NVMe reads in parallel and
+// avoids N separate pread() syscalls.
 struct IoUringSlab {
     struct io_uring ring;
     bool ok = false;
@@ -35,35 +34,82 @@ void io_uring_slab_destroy(void* ctx) {
     delete static_cast<IoUringSlab*>(ctx);
 }
 
+// Queue every slice in `slices` and submit, tagging each completion with
+// `token`. Returns the number of requests queued, or -1 on failure. Does not
+// wait for the kernel; call io_uring_slab_reap to collect completions. If the
+// submission queue fills mid-batch it is drained and re-queued, so the batch
+// should be smaller than the CQ depth (dense layers use about a dozen slices).
+int io_uring_slab_submit(void* ctx, int fd, const std::vector<IoUringSlice>& slices, int64_t token) {
+    auto* r = static_cast<IoUringSlab*>(ctx);
+    if (!r || !r->ok || fd < 0) {
+        return -1;
+    }
+    int queued = 0;
+    int pending = 0;
+    for (const auto& s : slices) {
+        struct io_uring_sqe* sqe = io_uring_get_sqe(&r->ring);
+        if (!sqe) {
+            if (io_uring_submit(&r->ring) < 0) return -1;
+            pending = 0;
+            sqe = io_uring_get_sqe(&r->ring);
+            if (!sqe) break; // queue genuinely stuck
+        }
+        io_uring_prep_read(sqe, fd, s.dst, static_cast<unsigned>(s.len), static_cast<uint64_t>(s.offset));
+        io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(static_cast<intptr_t>(token)));
+        queued++;
+        pending++;
+    }
+    if (pending > 0 && io_uring_submit(&r->ring) < 0) {
+        return -1;
+    }
+    return queued > 0 ? queued : -1;
+}
+
+// Wait for one completion and report its token and result. Returns false only
+// on a hard io_uring error.
+bool io_uring_slab_reap(void* ctx, int64_t* token, int* res) {
+    auto* r = static_cast<IoUringSlab*>(ctx);
+    if (!r || !r->ok) {
+        return false;
+    }
+    struct io_uring_cqe* cqe = nullptr;
+    if (io_uring_wait_cqe(&r->ring, &cqe) < 0) {
+        return false;
+    }
+    if (token) {
+        *token = static_cast<int64_t>(reinterpret_cast<intptr_t>(io_uring_cqe_get_data(cqe)));
+    }
+    if (res) {
+        *res = cqe->res;
+    }
+    io_uring_cqe_seen(&r->ring, cqe);
+    return true;
+}
+
 bool io_uring_slab_read(void* ctx, int fd, const std::vector<IoUringSlice>& slices) {
     auto* r = static_cast<IoUringSlab*>(ctx);
     if (!r || !r->ok || fd < 0 || slices.empty()) {
         return false;
     }
-
     bool all_ok = true;
     size_t start = 0;
     const size_t chunk = 128;  // well under the queue depth
     while (start < slices.size()) {
-        size_t end = std::min(start + chunk, slices.size());
-        unsigned inflight = 0;
-        for (size_t i = start; i < end; ++i) {
-            struct io_uring_sqe* sqe = io_uring_get_sqe(&r->ring);
-            if (!sqe) break;  // SQ full: submit what we have, continue
-            io_uring_prep_read(sqe, fd,
-                               slices[i].dst,
-                               static_cast<unsigned>(slices[i].len),
-                               static_cast<uint64_t>(slices[i].offset));
-            io_uring_sqe_set_data(sqe, nullptr);
-            inflight++;
+        const size_t end = std::min(start + chunk, slices.size());
+        std::vector<IoUringSlice> part(slices.begin() + start, slices.begin() + end);
+        const int n = io_uring_slab_submit(ctx, fd, part, 0);
+        if (n < 0) {
+            all_ok = false;
+            break;
         }
-        if (inflight == 0) { all_ok = false; break; }
-        if (io_uring_submit(&r->ring) < 0) { all_ok = false; break; }
-        for (unsigned k = 0; k < inflight; ++k) {
-            struct io_uring_cqe* cqe = nullptr;
-            if (io_uring_wait_cqe(&r->ring, &cqe) < 0) { all_ok = false; break; }
-            if (cqe->res < 0) all_ok = false;
-            io_uring_cqe_seen(&r->ring, cqe);
+        for (int k = 0; k < n; ++k) {
+            int64_t token = 0;
+            int res = 0;
+            if (!io_uring_slab_reap(ctx, &token, &res)) {
+                all_ok = false;
+                break;
+            }
+            if (res < 0) all_ok = false;
         }
         start = end;
     }

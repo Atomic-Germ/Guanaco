@@ -1,5 +1,5 @@
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 7e6974431..b488c6ed2 100644
+index 7e69744..37de24c 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -1,5 +1,6 @@
@@ -129,7 +129,7 @@ index 7e6974431..b488c6ed2 100644
          /*.abort_callback              =*/ nullptr,
          /*.abort_callback_data         =*/ nullptr,
          /*.embeddings                  =*/ false,
-@@ -3893,13 +3963,56 @@ llama_context_params llama_context_default_params() {
+@@ -3893,13 +3963,65 @@ llama_context_params llama_context_default_params() {
  }
  
  llama_context * llama_init_from_model(
@@ -156,7 +156,16 @@ index 7e6974431..b488c6ed2 100644
 +            return true;
 +        }
 +        const char * name = ggml_get_name(t);
-+        if (name == nullptr || strncmp(name, "ffn_moe_topk", 12) != 0) {
++        if (name == nullptr) {
++            return true;
++        }
++        // Dense layer-window streaming: "l_out-<il>" is emitted once per
++        // transformer layer, so it marks the layer boundary for the pager.
++        if (strncmp(name, "l_out-", 6) == 0) {
++            hook->on_layer_boundary(atoi(name + 6));
++            return true;
++        }
++        if (strncmp(name, "ffn_moe_topk", 12) != 0) {
 +            return true;
 +        }
 +        // runtime name is "ffn_moe_topk-<il>" (layer suffix)
