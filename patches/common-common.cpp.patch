@@ -1,5 +1,5 @@
 diff --git a/common/common.cpp b/common/common.cpp
-index 9a71a33..170e71b 100644
+index 9a71a33ff..170e71bff 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
 @@ -1672,6 +1672,16 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {

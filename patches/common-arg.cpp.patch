@@ -1,5 +1,5 @@
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 7c1b81e..050957f 100644
+index 7c1b81e0f..050957ff7 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -399,6 +399,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
