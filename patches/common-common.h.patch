@@ -1,5 +1,5 @@
 diff --git a/common/common.h b/common/common.h
-index d89f803..6b9ca82 100644
+index d89f803af..6b9ca8233 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -485,6 +485,9 @@ struct common_params {

@@ -2,6 +2,7 @@
 #include "gguf.h"
 #include "ggml-backend.h"
 #include <cstring>
+#include <cerrno>
 #include <cstdlib>
 #include <algorithm>
 #include <iostream>
@@ -16,10 +17,11 @@
 #include <string>
 #include <chrono>
 
-// imatrix prior: reuse llama.cpp's common loader to read a sibling
-// "<model>.imatrix.gguf". It exposes, per expert tensor, a `counts`
-// vector sized to the expert dimension.
-#include "common/imatrix-loader.h"
+// imatrix prior: read a sibling "<model>.imatrix.gguf". This must be the same
+// header src/imatrix-loader.cpp compiles against - including the upstream copy
+// instead gives the two translation units different layouts for common_imatrix
+// and corrupts the heap (see src/imatrix-loader.h).
+#include "imatrix-loader.h"
 
 namespace guanaco {
 
@@ -542,21 +544,56 @@ bool SteppeLoader::parse_gguf_metadata() {
               << ", layers=" << model_config_.num_hidden_layers
               << ", hidden=" << model_config_.hidden_size << std::endl;
 
-    // Dense model (or expert count unknown): there is no routing to exploit.
-    // If a byte budget was given, switch to layer-window streaming; otherwise
-    // disable streaming so we never mistake a dense FFN tensor for a
-    // 1-expert block. ggml's normal mmap is used in the disabled case.
+    // Two paging mechanisms, deliberately composable:
+    //
+    //   expert paging  - fused ffn_*_exps tensors, paged per expert slice with
+    //                    madvise on the file mmap. Granular, but bounds
+    //                    residency by expert COUNT, not bytes.
+    //   layer windows  - every other tensor, paged whole-layer into private
+    //                    slabs. Coarse, but bounds residency in BYTES.
+    //
+    // The expert path leaves attention, embeddings and shared experts entirely
+    // unmanaged, so on its own it cannot honour a RAM target. When a byte
+    // budget is given we run both: experts keep their granularity, and the
+    // layer-window pager owns the remainder so the budget actually binds.
+    const bool want_budget = config_.dense_streaming && config_.dense_budget_bytes > 0;
+    if (want_budget) {
+        dense_enabled_ = true;
+        std::cerr << "[Guanaco Storage] layer-window streaming enabled (budget="
+                  << (config_.dense_budget_bytes / (1024 * 1024)) << " MB, prefetch ahead="
+                  << config_.dense_prefetch_ahead << " layers)\n";
+    }
+
+    // A private anonymous slab is unreclaimable without swap. It is the right
+    // trade only when the model FITS the budget: DONTNEED then really frees,
+    // and the refill costs a zero-fill. For a model far larger than RAM - the
+    // case this whole project exists for - anonymous slabs are fatal, because
+    // the kernel cannot drop them and simply OOMs. Those must stay on the file
+    // mmap, where clean pages are reclaimable and re-fault from NVMe on demand.
+    // In hybrid mode the expert tensors already page that way, so keep the
+    // non-expert tensors there too instead of redirecting t->data at a slab.
+    if (dense_enabled_ && model_config_.num_experts > 1 && config_.dense_use_slab) {
+        config_.dense_use_slab = false;
+        std::cerr << "[Guanaco Storage] MoE + budget: paging the file mmap directly,\n"
+                  << "[Guanaco Storage] not private slabs (anonymous pages are unreclaimable).\n";
+    }
+
     if (model_config_.num_experts <= 1) {
+        // No routing to exploit: never mistake a dense FFN tensor for a
+        // 1-expert block.
         enabled_ = false;
-        if (config_.dense_streaming && config_.dense_budget_bytes > 0) {
-            dense_enabled_ = true;
-            std::cerr << "[Guanaco Storage] Dense model: layer-window streaming enabled (budget="
-                      << (config_.dense_budget_bytes / (1024 * 1024)) << " MB, prefetch ahead="
-                      << config_.dense_prefetch_ahead << " layers)\n";
-        } else {
+        if (!dense_enabled_) {
             std::cerr << "[Guanaco Storage] No MoE experts detected (experts="
                       << model_config_.num_experts << ") - disabling Guanaco disk streaming (passthrough)\n";
         }
+    } else if (dense_enabled_) {
+        std::cerr << "[Guanaco Storage] hybrid mode: " << model_config_.num_experts
+                  << " experts paged per-expert; non-expert tensors paged per-layer under the byte budget\n";
+    } else {
+        // No budget: expert paging only, and nothing bounds total RAM.
+        std::cerr << "[Guanaco Storage] WARNING: no --guanaco-dense-budget set, so per-expert paging is\n"
+                  << "[Guanaco Storage] WARNING: unbounded by bytes; residency is limited only by -gm ("
+                  << config_.max_active_experts << ") and kernel reclaim. Set -gdb to bound total RAM.\n";
     }
 
     return true;
@@ -657,6 +694,32 @@ std::future<void> SteppeLoader::read_expert_async(const ExpertManifestEntry& ent
     return future;
 }
 
+// madvise() requires a page-aligned start address and returns EINVAL otherwise.
+//
+// This matters on the expert path: llama.cpp places each weight at
+// mapping->addr() + weight->offs, and weight->offs is only tensor_align (32B)
+// aligned, not page aligned. A raw madvise() on mmap_base, or on
+// mmap_base + id*per_expert_bytes, therefore fails with EINVAL and does
+// nothing, so the paging control silently never takes effect. Private slabs
+// are page aligned by construction, but route every call through this.
+int SteppeLoader::madvise_range(void* base, size_t size, int advice) {
+    if (base == nullptr || size == 0) return 0;
+    const size_t page = (size_t) sysconf(_SC_PAGESIZE);
+    uintptr_t addr  = (uintptr_t) base;
+    uintptr_t start = addr & ~(uintptr_t)(page - 1);
+    uintptr_t end   = (addr + size + page - 1) & ~(uintptr_t)(page - 1);
+    if (madvise((void*) start, (size_t)(end - start), advice) != 0) {
+        ++madvise_failures_;
+        if (madvise_failures_ <= 4) {
+            std::cerr << "[Guanaco Storage] madvise failed: " << strerror(errno)
+                      << " - paging control is NOT taking effect\n";
+        }
+        return -1;
+    }
+    ++madvise_ops_;
+    return 0;
+}
+
 void SteppeLoader::advise_experts_random() {
     if (fd_ < 0 || expert_tensors_.empty()) {
         return;
@@ -670,7 +733,7 @@ void SteppeLoader::advise_experts_random() {
     for (auto& kv : expert_tensors_) {
         ExpertTensor& t = kv.second;
         if (t.mmap_base == nullptr || t.byte_size == 0) continue;
-        madvise(t.mmap_base, t.byte_size, MADV_RANDOM);
+        madvise_range(t.mmap_base, t.byte_size, MADV_RANDOM);
         if (posix_fadvise(fd_, (off_t)t.file_offset, (off_t)t.byte_size, POSIX_FADV_RANDOM) == 0) {
             ++advised;
         }
@@ -687,18 +750,6 @@ const ExpertManifestEntry* SteppeLoader::lookup_expert(const std::string& name) 
         }
     }
     return nullptr;
-}
-
-// madvise() requires page-aligned addresses. Slabs are page-aligned by
-// construction, but the helper keeps the call sites uniform and tolerates any
-// infra-page base.
-static int madvise_range(void* base, size_t size, int advice) {
-    if (base == nullptr || size == 0) return 0;
-    const size_t page = (size_t) sysconf(_SC_PAGESIZE);
-    uintptr_t addr  = (uintptr_t) base;
-    uintptr_t start = addr & ~(uintptr_t)(page - 1);
-    uintptr_t end   = (addr + size + page - 1) & ~(uintptr_t)(page - 1);
-    return madvise((void*) start, (size_t)(end - start), advice);
 }
 
 static size_t page_align(size_t n) {
@@ -726,6 +777,13 @@ void* SteppeLoader::alloc_slab(size_t byte_size) {
 void SteppeLoader::register_stream_tensor(const std::string& name, int layer,
                                           size_t file_offset, size_t byte_size, void* mmap_base) {
     if (!dense_enabled_ || fd_ < 0 || byte_size == 0 || layer < 0) {
+        return;
+    }
+    // In hybrid mode a fused expert tensor is already owned by the expert path,
+    // which madvises it in place on the file mmap. Registering it here as well
+    // would redirect ggml's t->data at a private slab while the expert path
+    // keeps pressing the old address, so the two would fight over residency.
+    if (enabled_ && expert_tensors_.count(name)) {
         return;
     }
     auto& vec = stream_layers_[layer];
@@ -1033,17 +1091,43 @@ void SteppeLoader::fill_resident_layers() {
     const int n_layers = stream_n_layers_;
     size_t avg_layer = (n_layers > 0) ? stream_total_bytes_ / (size_t)n_layers : 0;
     int w = n_layers;
-    if (dense_budget_bytes_ > 0 && avg_layer > 0) {
-        w = (int)(dense_budget_bytes_ / avg_layer);
+    const bool hybrid = enabled_ && !expert_tensors_.empty();
+
+    // In hybrid mode the budget has to be SPLIT, not consumed by whichever path
+    // asks first. Letting the pager take all of it (it clamps w to n_layers when
+    // the budget exceeds the tensor total) leaves the expert ceiling at zero,
+    // and a zero ceiling evicts the very slices the in-flight forward pass is
+    // reading - livelock, not streaming. Give the experts a floor first, then
+    // give the pager what is left.
+    size_t pager_budget = dense_budget_bytes_;
+    if (hybrid && dense_budget_bytes_ > 0) {
+        const size_t expert_share = dense_budget_bytes_ / 2;
+        pager_budget = dense_budget_bytes_ - expert_share;
+        expert_budget_bytes_ = expert_share;
+    }
+
+    if (pager_budget > 0 && avg_layer > 0) {
+        w = (int)(pager_budget / avg_layer);
     }
     if (w < 1) w = 1; // the first forward pass needs layer 0 resident
     if (w > n_layers) w = n_layers;
     stream_resident_layers_ = w;
+    stream_resident_bytes_ = (size_t) w * avg_layer;
     for (int L = 0; L < w; ++L) {
         prefetch_layer(L);
     }
     std::cerr << "[Guanaco Pager] resident subset: " << w << "/" << n_layers
-              << " layers (" << (dense_budget_bytes_ / (1024*1024)) << " MB budget)\n";
+              << " layers (" << (dense_budget_bytes_ / (1024*1024)) << " MB budget)";
+    if (enabled_ && !expert_tensors_.empty()) {
+        // Report the split honestly: the pager bounds the non-expert tensors,
+        // and the expert path adds its own residency on top. The two budgets
+        // are independent, so total RAM is budget + expert residency.
+        size_t expert_bytes = 0;
+        for (const auto& kv : expert_tensors_) expert_bytes += kv.second.byte_size;
+        std::cerr << "; hybrid: " << (expert_bytes / (1024*1024)) << " MB of fused expert tensors"
+                  << " paged per-expert on top of the budget";
+    }
+    std::cerr << "\n";
 }
 
 void SteppeLoader::on_layer_boundary(int layer) {
@@ -1056,6 +1140,12 @@ void SteppeLoader::on_layer_boundary(int layer) {
         // Restart the async submit frontier at the resident subset edge.
         drain_inflight();
         submitted_upto_ = stream_resident_layers_ - 1;
+        // One forward pass == one token. Re-faulting during the previous token
+        // pushed expert residency back over the ceiling, so enforce it here
+        // rather than only on the much coarser pin cadence.
+        if (enabled_) {
+            enforce_expert_byte_ceiling();
+        }
     }
     last_boundary_layer_ = layer;
 
@@ -1121,6 +1211,7 @@ void SteppeLoader::register_expert_tensor(const std::string& name, int layer,
     t.per_expert_bytes = byte_size / static_cast<size_t>(num_experts);
     t.mmap_base      = mmap_base;
     t.loaded.assign(num_experts, true);   // mapped resident at load time
+    expert_resident_bytes_ += byte_size;  // tracked for the global byte ceiling
     t.total_hits.assign(num_experts, 0);
     t.window_hits.assign(num_experts, 0.0f);
     t.pinned.assign(num_experts, false);
@@ -1330,8 +1421,9 @@ void SteppeLoader::evict_to_budget(ExpertTensor& t) {
             evict_log_.push_back({&t, victim, eclock_, false});
             // Gate: loaded[victim]=false means the next select re-faults it.
             t.loaded[victim] = false;
+            expert_resident_bytes_ -= std::min<uint64_t>(t.per_expert_bytes, expert_resident_bytes_);
             void* addr = static_cast<char*>(t.mmap_base) + (size_t)victim * t.per_expert_bytes;
-            madvise(addr, t.per_expert_bytes, MADV_DONTNEED);
+            madvise_range(addr, t.per_expert_bytes, MADV_DONTNEED);
             --to_evict;
             ++reclaimed;
         }
@@ -1379,6 +1471,47 @@ void SteppeLoader::recompute_budgets() {
     }
 }
 
+void SteppeLoader::enforce_expert_byte_ceiling() {
+    if (expert_budget_bytes_ == 0 || expert_resident_bytes_ <= expert_budget_bytes_) {
+        return;
+    }
+
+    // Over the byte ceiling. Evict least-recently-used slices across all tensors
+    // until back under it. This DOES evict pinned experts: the byte budget is
+    // the hard constraint and the pin set is only a preference. Pins accumulate
+    // monotonically (nothing ever unpins), so exempting them would let
+    // residency grow without bound and make the ceiling unenforceable - which
+    // is exactly what a RAM target cannot tolerate.
+    //
+    // Collect every resident slice once, sort by recency, then evict from the
+    // cold end. Re-scanning for the global minimum on each eviction is
+    // O(evictions * experts); on a 144x288 model that is ~41k slices scanned
+    // per eviction, which hangs the forward pass outright.
+    struct Slice { uint64_t last_used; ExpertTensor * t; int id; };
+    std::vector<Slice> resident;
+    for (auto & kv : expert_tensors_) {
+        ExpertTensor & t = kv.second;
+        if (t.mmap_base == nullptr || t.per_expert_bytes == 0) continue;
+        for (int i = 0; i < t.num_experts; ++i) {
+            if (t.loaded[i]) resident.push_back({t.last_used[i], &t, i});
+        }
+    }
+    std::sort(resident.begin(), resident.end(),
+              [](const Slice & a, const Slice & b) { return a.last_used < b.last_used; });
+
+    for (const Slice & s : resident) {
+        if (expert_resident_bytes_ <= expert_budget_bytes_) break;
+        if (!s.t->loaded[s.id]) continue;   // already dropped by an earlier pass
+        ++evictions_;
+        s.t->loaded[s.id] = false;
+        expert_resident_bytes_ -=
+            std::min<uint64_t>(s.t->per_expert_bytes, expert_resident_bytes_);
+        void * addr = static_cast<char *>(s.t->mmap_base)
+                    + (size_t) s.id * s.t->per_expert_bytes;
+        madvise_range(addr, s.t->per_expert_bytes, MADV_DONTNEED);
+    }
+}
+
 void SteppeLoader::maybe_pin_hot_experts() {
     recompute_budgets();
     for (auto& kv : expert_tensors_) {
@@ -1404,8 +1537,9 @@ void SteppeLoader::maybe_pin_hot_experts() {
             if (!t.loaded[id]) {
                 // Ensure the slice is resident (it may have been evicted).
                 void* addr = static_cast<char*>(t.mmap_base) + (size_t)id * t.per_expert_bytes;
-                madvise(addr, t.per_expert_bytes, MADV_WILLNEED);
+                madvise_range(addr, t.per_expert_bytes, MADV_WILLNEED);
                 t.loaded[id] = true;
+                expert_resident_bytes_ += t.per_expert_bytes;
             }
             t.pinned[id] = true;
             ++pinned_total_;
@@ -1417,6 +1551,10 @@ void SteppeLoader::maybe_pin_hot_experts() {
         // the slices we just WILLNEED'd are recent so they survive the LRU cut.
         evict_to_budget(t);
     }
+
+    // Per-tensor count budgets say nothing about bytes. Enforce the global byte
+    // ceiling across every tensor now that the pins for this pass are in place.
+    enforce_expert_byte_ceiling();
 
     if (routing_records_ >= kWarmupLayers_ && routing_records_ % kLogEveryLayers_ == 0) {
         std::cerr << "[Guanaco HerdCache] distinct experts pinned: " << pinned_total_
@@ -1561,8 +1699,9 @@ void SteppeLoader::pin_from_seeded_totals() {
 
             if (!t.loaded[id] && t.mmap_base != nullptr) {
                 void* addr = static_cast<char*>(t.mmap_base) + (size_t)id * t.per_expert_bytes;
-                madvise(addr, t.per_expert_bytes, MADV_WILLNEED);
+                madvise_range(addr, t.per_expert_bytes, MADV_WILLNEED);
                 t.loaded[id] = true;
+                expert_resident_bytes_ += t.per_expert_bytes;
             }
             t.pinned[id] = true;
             ++pinned_total_;
@@ -1626,6 +1765,22 @@ void SteppeLoader::log_final_summary() {
                   << ", ahead=" << config_.dense_prefetch_ahead
                   << ", evict=" << dense_evict_name()
                   << ", waits=" << dense_wait_ops_
+                  << ", madvise=" << madvise_ops_ << " ok/" << madvise_failures_ << " failed"
+                  << "\n";
+        if (!enabled_) {
+            return;
+        }
+        // Hybrid: both mechanisms ran, so report the expert half too.
+        std::cerr << "[Guanaco HerdCache] final: " << expert_tensors_.size()
+                  << " expert tensors, expert resident="
+                  << (expert_resident_bytes_ / (1024*1024)) << " MB";
+        if (expert_budget_bytes_ > 0) {
+            std::cerr << "/" << (expert_budget_bytes_ / (1024*1024)) << " MB ceiling";
+        } else {
+            std::cerr << " (no ceiling)";
+        }
+        std::cerr << ", evictions=" << evictions_
+                  << ", madvise=" << madvise_ops_ << " ok/" << madvise_failures_ << " failed"
                   << "\n";
         return;
     }
@@ -1666,6 +1821,11 @@ void SteppeLoader::log_final_summary() {
                       " (" + std::to_string((evict_reread_ * 100) / evictions_) + "% churn)")
                    : "")
                << (imatrix_loaded_ ? ", imatrix prior used" : "")
+               << ", expert resident=" << (expert_resident_bytes_ / (1024*1024)) << " MB"
+               << (expert_budget_bytes_ > 0
+                   ? ("/" + std::to_string(expert_budget_bytes_ / (1024*1024)) + " MB ceiling")
+                   : " (no ceiling)")
+               << ", madvise=" << madvise_ops_ << " ok/" << madvise_failures_ << " failed"
                << "\n";
 }
 
@@ -1740,8 +1900,9 @@ void SteppeLoader::prefetch_experts(int layer, const int* expert_ids, int n) {
         // slightly later). No copy, no redirect - ggml reads the same address.
         for (int id : want) {
             void* addr = static_cast<char*>(t.mmap_base) + (size_t)id * t.per_expert_bytes;
-            madvise(addr, t.per_expert_bytes, MADV_WILLNEED);
+            madvise_range(addr, t.per_expert_bytes, MADV_WILLNEED);
             t.loaded[id] = true;
+            expert_resident_bytes_ += t.per_expert_bytes;
         }
         // Do NOT evict here - the slices we just made resident are needed by
         // the mul_mat_id node that runs immediately after this callback returns.

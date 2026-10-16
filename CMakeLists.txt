@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(guanaco VERSION 0.1.0 LANGUAGES C CXX)
+project(guanaco VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +32,56 @@ if(RT_LIBRARY)
     add_compile_definitions(GUANACO_HAVE_MADVISE=1)
 endif()
 
+# === Upstream llama.cpp checkout ===
+# llama.cpp/ is a disposable clone of upstream ggml-org/llama.cpp that is not
+# tracked here. Clone it at configure time when it is missing so a fresh copy of
+# this repository builds without manual setup. An existing checkout is used
+# as-is and never moved, so local work in it is preserved.
+set(GUANACO_LLAMA_CPP_REPO "https://github.com/ggml-org/llama.cpp" CACHE STRING
+    "Upstream repository cloned into ./llama.cpp")
+set(GUANACO_LLAMA_CPP_REF "" CACHE STRING
+    "Optional llama.cpp git ref (tag, branch or commit) checked out on a fresh clone")
+
+set(LLAMA_CPP_DIR ${CMAKE_SOURCE_DIR}/llama.cpp)
+
+if(EXISTS ${LLAMA_CPP_DIR}/CMakeLists.txt)
+    message(STATUS "Using existing llama.cpp checkout: ${LLAMA_CPP_DIR}")
+    if(GUANACO_LLAMA_CPP_REF)
+        message(STATUS "  (GUANACO_LLAMA_CPP_REF is ignored for an existing checkout)")
+    endif()
+elseif(EXISTS ${LLAMA_CPP_DIR})
+    message(FATAL_ERROR
+        "${LLAMA_CPP_DIR} exists but is not a llama.cpp checkout (no CMakeLists.txt). "
+        "Remove or move it, then reconfigure.")
+else()
+    find_package(Git REQUIRED)
+    message(STATUS "llama.cpp checkout not found, cloning ${GUANACO_LLAMA_CPP_REPO}")
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} clone --recursive "${GUANACO_LLAMA_CPP_REPO}" "${LLAMA_CPP_DIR}"
+        RESULT_VARIABLE CLONE_RESULT
+    )
+    if(NOT CLONE_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to clone ${GUANACO_LLAMA_CPP_REPO}")
+    endif()
+    if(GUANACO_LLAMA_CPP_REF)
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} -C "${LLAMA_CPP_DIR}" fetch --tags origin
+            RESULT_VARIABLE FETCH_RESULT
+        )
+        if(NOT FETCH_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to fetch refs for ${GUANACO_LLAMA_CPP_REPO}")
+        endif()
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} -C "${LLAMA_CPP_DIR}" checkout --detach "${GUANACO_LLAMA_CPP_REF}"
+            RESULT_VARIABLE CHECKOUT_RESULT
+        )
+        if(NOT CHECKOUT_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to check out llama.cpp ref: ${GUANACO_LLAMA_CPP_REF}")
+        endif()
+        message(STATUS "  Checked out ref: ${GUANACO_LLAMA_CPP_REF}")
+    endif()
+endif()
+
 # === Patch llama.cpp ===
 if(GUANACO_PATCH_LLAMA_CPP)
     message(STATUS "Applying Guanaco patches to llama.cpp...")
@@ -40,7 +90,7 @@ if(GUANACO_PATCH_LLAMA_CPP)
         get_filename_component(PATCH_NAME ${PATCH} NAME)
         execute_process(
             COMMAND patch -p1 --forward --dry-run --no-backup-if-mismatch -i "${PATCH}"
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/llama.cpp
+            WORKING_DIRECTORY ${LLAMA_CPP_DIR}
             RESULT_VARIABLE PATCH_CHECK
             ERROR_QUIET
             OUTPUT_QUIET
@@ -48,7 +98,7 @@ if(GUANACO_PATCH_LLAMA_CPP)
         if(PATCH_CHECK EQUAL 0)
             execute_process(
                 COMMAND patch -p1 --forward --no-backup-if-mismatch -i "${PATCH}"
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/llama.cpp
+                WORKING_DIRECTORY ${LLAMA_CPP_DIR}
                 RESULT_VARIABLE PATCH_RESULT
             )
             if(PATCH_RESULT EQUAL 0)
@@ -59,7 +109,7 @@ if(GUANACO_PATCH_LLAMA_CPP)
         else()
             execute_process(
                 COMMAND patch -p1 --reverse --dry-run --no-backup-if-mismatch -i "${PATCH}"
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/llama.cpp
+                WORKING_DIRECTORY ${LLAMA_CPP_DIR}
                 RESULT_VARIABLE PATCH_REVERSE_CHECK
                 ERROR_QUIET
                 OUTPUT_QUIET
@@ -94,7 +144,7 @@ set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 if(UNIX AND NOT APPLE AND (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
     add_link_options(LINKER:--disable-new-dtags)
 endif()
-add_subdirectory(${CMAKE_SOURCE_DIR}/llama.cpp llama.cpp)
+add_subdirectory(${LLAMA_CPP_DIR} llama.cpp)
 
 # Add guanaco include path so llama.cpp can find guanaco/guanaco.h when patched
 target_include_directories(llama PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -118,8 +168,8 @@ add_library(guanaco
 
 target_include_directories(guanaco PUBLIC
     ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/llama.cpp
-    ${CMAKE_SOURCE_DIR}/llama.cpp/ggml/src
+    ${LLAMA_CPP_DIR}
+    ${LLAMA_CPP_DIR}/ggml/src
 )
 
 # imatrix prior: compile a copy of llama.cpp's imatrix-loader.cpp directly

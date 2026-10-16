@@ -257,10 +257,20 @@ private:
     int    stream_resident_layers_ = 0;     // fixed resident subset size W (layers [0,W))
     long   dense_wait_ops_     = 0;         // ensure_layer calls that had to wait
     int    submitted_upto_     = -1;        // highest streamed layer queued to io_uring
+    uint64_t madvise_ops_      = 0;         // successful madvise_range calls
+    uint64_t madvise_failures_ = 0;         // rejected by the kernel (e.g. EINVAL)
+    // Global expert residency, tracked so the expert path can honour a byte
+    // budget rather than only the per-tensor expert-count cap.
+    uint64_t expert_resident_bytes_ = 0;
+    size_t   expert_budget_bytes_   = 0;   // 0 = no ceiling (no -gdb given)
+    size_t   stream_resident_bytes_ = 0;   // bytes held by the layer pager
 
     void prefetch_layer(int layer);
     void evict_layer(int layer);
     void* alloc_slab(size_t byte_size);
+    // Page-aligns and issues madvise(), counting successes and failures so a
+    // silently rejected advice call cannot go unnoticed.
+    int  madvise_range(void* base, size_t size, int advice);
     // Submit a layer's slab reads to io_uring without waiting. Returns false if
     // io_uring is unavailable or the submit failed (caller falls back to sync).
     bool submit_layer_async(int layer);
@@ -323,6 +333,9 @@ private:
     // is actually needed. Idle tensors shrink, busy ones grow; the aggregate
     // stays within max_active_experts * n_tensors.
     void recompute_budgets();
+    // Evict globally least-recently-used non-pinned expert slices across every
+    // tensor until expert residency is back under expert_budget_bytes_.
+    void enforce_expert_byte_ceiling();
     // LRU eviction: keep at most max_active_experts resident (pinned +
     // warm) slices per tensor. Non-pinned slices are evicted least-
     // recently-used first; their slab pages are dropped (safe because a

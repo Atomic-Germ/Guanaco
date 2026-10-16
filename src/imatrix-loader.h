@@ -1,16 +1,31 @@
 #pragma once
 
+// Standalone copy of llama.cpp's common/imatrix-loader.{h,cpp}, so guanaco can
+// read imatrix priors without linking libllama-common (which would create a
+// circular dependency: llama -> guanaco -> llama-common -> llama).
+//
+// The struct layout MUST stay identical to llama.cpp/common/imatrix-loader.h.
+// Any other translation unit that calls common_imatrix_load must include THIS
+// header, not the upstream one: two different definitions of common_imatrix in
+// one binary is an ODR violation that silently corrupts the heap.
+//
+// When syncing with upstream, keep the fields below in the same order. Fields
+// this copy does not populate (activations) are kept for layout parity only.
+
 #include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
 
-inline constexpr const char * LLM_KV_IMATRIX_DATASETS    = "imatrix.datasets";
-inline constexpr const char * LLM_KV_IMATRIX_CHUNK_COUNT = "imatrix.chunk_count";
-inline constexpr const char * LLM_KV_IMATRIX_CHUNK_SIZE  = "imatrix.chunk_size";
+inline constexpr const char * LLM_KV_IMATRIX_DATASETS      = "imatrix.datasets";
+inline constexpr const char * LLM_KV_IMATRIX_CHUNK_COUNT   = "imatrix.chunk_count";
+inline constexpr const char * LLM_KV_IMATRIX_CHUNK_SIZE    = "imatrix.chunk_size";
+inline constexpr const char * LLM_KV_IMATRIX_STATS_SCHEMA  = "imatrix.stats_schema";
+inline constexpr const char * LLM_KV_IMATRIX_N_LAYER_NEXTN = "imatrix.n_layer_nextn";
 
 struct common_imatrix_entry {
     std::vector<float>   sums;
+    std::vector<float>   activations;
     std::vector<int64_t> counts;
 };
 
@@ -19,6 +34,7 @@ struct common_imatrix {
     std::vector<std::string> datasets;
     int32_t chunk_count    = 0;
     int32_t chunk_size     = 0;
+    int32_t n_layer_nextn  = 0;
     bool    is_legacy      = false;
     bool    has_metadata   = false;
 };
