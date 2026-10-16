@@ -35,19 +35,54 @@ endif()
 # === Upstream llama.cpp checkout ===
 # llama.cpp/ is a disposable clone of upstream ggml-org/llama.cpp that is not
 # tracked here. Clone it at configure time when it is missing so a fresh copy of
-# this repository builds without manual setup. An existing checkout is used
-# as-is and never moved, so local work in it is preserved.
+# this repository builds without manual setup.
+#
+# The clone is pinned to the upstream commit that patches/*.patch was generated
+# against, so a fresh configure reproduces the exact tree the patchset was
+# validated on. llama.cpp moves fast: 150 commits landed after this pin, 19 of
+# them touching patched files, and the patchset no longer applies cleanly there.
+# Bump GUANACO_LLAMA_CPP_REF only as part of an upstream refresh, together with
+# regenerating patches/*.patch -- never on its own.
 set(GUANACO_LLAMA_CPP_REPO "https://github.com/ggml-org/llama.cpp" CACHE STRING
     "Upstream repository cloned into ./llama.cpp")
-set(GUANACO_LLAMA_CPP_REF "" CACHE STRING
-    "Optional llama.cpp git ref (tag, branch or commit) checked out on a fresh clone")
+set(GUANACO_LLAMA_CPP_REF "aa94f2086147cd4bfbcff818ce998dffce5fcb39" CACHE STRING
+    "Upstream llama.cpp commit the patchset was built against; empty means upstream HEAD")
 
 set(LLAMA_CPP_DIR ${CMAKE_SOURCE_DIR}/llama.cpp)
 
+# Report the commit an existing checkout is on, so a drifted tree is visible
+# instead of silently building an untested upstream/patchset combination.
+function(guanaco_llama_cpp_head out_var dir)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} -C "${dir}" rev-parse HEAD
+        RESULT_VARIABLE head_result
+        OUTPUT_VARIABLE head_out
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(head_result EQUAL 0)
+        set(${out_var} "${head_out}" PARENT_SCOPE)
+    else()
+        set(${out_var} "" PARENT_SCOPE)
+    endif()
+endfunction()
+
 if(EXISTS ${LLAMA_CPP_DIR}/CMakeLists.txt)
+    find_package(Git QUIET)
     message(STATUS "Using existing llama.cpp checkout: ${LLAMA_CPP_DIR}")
-    if(GUANACO_LLAMA_CPP_REF)
-        message(STATUS "  (GUANACO_LLAMA_CPP_REF is ignored for an existing checkout)")
+    if(GIT_FOUND)
+        guanaco_llama_cpp_head(existing_head ${LLAMA_CPP_DIR})
+        if(existing_head STREQUAL "")
+            message(WARNING
+                "  Cannot read a git commit for this checkout (missing or broken .git). "
+                "Its provenance cannot be verified against the patchset.")
+        elseif(GUANACO_LLAMA_CPP_REF AND NOT existing_head STREQUAL GUANACO_LLAMA_CPP_REF)
+            message(WARNING
+                "  Checkout is at ${existing_head}, but patches/*.patch target "
+                "${GUANACO_LLAMA_CPP_REF}. The patchset may not apply, or may apply "
+                "to a combination that was never tested. Remove llama.cpp/ to "
+                "re-clone at the pinned commit.")
+        endif()
     endif()
 elseif(EXISTS ${LLAMA_CPP_DIR})
     message(FATAL_ERROR
@@ -56,29 +91,56 @@ elseif(EXISTS ${LLAMA_CPP_DIR})
 else()
     find_package(Git REQUIRED)
     message(STATUS "llama.cpp checkout not found, cloning ${GUANACO_LLAMA_CPP_REPO}")
-    execute_process(
-        COMMAND ${GIT_EXECUTABLE} clone --recursive "${GUANACO_LLAMA_CPP_REPO}" "${LLAMA_CPP_DIR}"
-        RESULT_VARIABLE CLONE_RESULT
-    )
+    # Upstream is large and the clone is long, so transient transport failures
+    # (HTTP 408, dropped connections) are common enough to be worth retrying.
+    # Start from a clean directory each attempt: a half-written clone makes the
+    # next attempt fail with a confusing error.
+    set(CLONE_ATTEMPTS 3)
+    foreach(attempt RANGE 1 ${CLONE_ATTEMPTS})
+        if(attempt GREATER 1)
+            file(REMOVE_RECURSE "${LLAMA_CPP_DIR}")
+            message(STATUS "  clone attempt ${attempt}/${CLONE_ATTEMPTS}")
+        endif()
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} clone --recursive "${GUANACO_LLAMA_CPP_REPO}" "${LLAMA_CPP_DIR}"
+            RESULT_VARIABLE CLONE_RESULT
+        )
+        if(CLONE_RESULT EQUAL 0)
+            break()
+        endif()
+    endforeach()
     if(NOT CLONE_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to clone ${GUANACO_LLAMA_CPP_REPO}")
+        message(FATAL_ERROR
+            "Failed to clone ${GUANACO_LLAMA_CPP_REPO} after ${CLONE_ATTEMPTS} attempts. "
+            "If this is a network or proxy problem, fetch it manually:\n"
+            "  git clone --recursive ${GUANACO_LLAMA_CPP_REPO} ${LLAMA_CPP_DIR}\n"
+            "  git -C ${LLAMA_CPP_DIR} checkout --detach ${GUANACO_LLAMA_CPP_REF}\n"
+            "and reconfigure.")
     endif()
     if(GUANACO_LLAMA_CPP_REF)
-        execute_process(
-            COMMAND ${GIT_EXECUTABLE} -C "${LLAMA_CPP_DIR}" fetch --tags origin
-            RESULT_VARIABLE FETCH_RESULT
-        )
-        if(NOT FETCH_RESULT EQUAL 0)
-            message(FATAL_ERROR "Failed to fetch refs for ${GUANACO_LLAMA_CPP_REPO}")
-        endif()
         execute_process(
             COMMAND ${GIT_EXECUTABLE} -C "${LLAMA_CPP_DIR}" checkout --detach "${GUANACO_LLAMA_CPP_REF}"
             RESULT_VARIABLE CHECKOUT_RESULT
         )
         if(NOT CHECKOUT_RESULT EQUAL 0)
-            message(FATAL_ERROR "Failed to check out llama.cpp ref: ${GUANACO_LLAMA_CPP_REF}")
+            message(FATAL_ERROR
+                "Cloned ${GUANACO_LLAMA_CPP_REPO} but could not check out pinned ref "
+                "${GUANACO_LLAMA_CPP_REF}. If it is not reachable from the default "
+                "branch, fetch it manually and reconfigure.")
         endif()
-        message(STATUS "  Checked out ref: ${GUANACO_LLAMA_CPP_REF}")
+        # The clone synced submodules for the default branch, not the pinned
+        # commit, so realign them with the tree we are about to patch.
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} -C "${LLAMA_CPP_DIR}" submodule update --recursive --init
+            RESULT_VARIABLE SUBMODULE_RESULT
+            ERROR_QUIET
+        )
+        if(NOT SUBMODULE_RESULT EQUAL 0)
+            message(WARNING "  Failed to sync submodules to ${GUANACO_LLAMA_CPP_REF}")
+        endif()
+        message(STATUS "  Pinned to ${GUANACO_LLAMA_CPP_REF}")
+    else()
+        message(STATUS "  Using upstream default branch (GUANACO_LLAMA_CPP_REF is empty)")
     endif()
 endif()
 
