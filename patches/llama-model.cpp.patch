@@ -1,5 +1,5 @@
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index b3a0cf5d5..a1f51dce4 100644
+index b3a0cf5d5..9cb256be2 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1,5 +1,9 @@
@@ -379,12 +379,24 @@ index b3a0cf5d5..a1f51dce4 100644
  ggml_tensor * llama_model_base::create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
      GGML_ASSERT(ml != nullptr);
      return create_tensor(*ml, tn, ne, flags);
-@@ -3482,6 +3651,74 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
+@@ -3482,6 +3651,92 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
      }
  }
  
 +void llama_model_base::allocate_uma_weights() {
 +    if (!gpu_pill_active) {
++        return;
++    }
++
++    // no_alloc models (used by --fit probing) have no tensor data to copy
++    if (hparams.no_alloc) {
++        return;
++    }
++
++    // Guanaco streaming owns tensor data placement: the pager holds the original
++    // mmap addresses it reads into. Redirecting t->data would strand the pager.
++    if (guanaco_hook != nullptr) {
++        LLAMA_LOG_INFO("%s: streaming active - weights stay in the file mmap\n", __func__);
 +        return;
 +    }
 +
@@ -411,6 +423,12 @@ index b3a0cf5d5..a1f51dce4 100644
 +        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
 +            // Skip tensors already on a GPU device buffer (non-host)
 +            if (t->buffer != nullptr && !ggml_backend_buffer_is_host(t->buffer)) {
++                n_skipped++;
++                continue;
++            }
++
++            // Skip tensors with no allocated data (views, skipped, no_alloc)
++            if (t->data == nullptr) {
 +                n_skipped++;
 +                continue;
 +            }
