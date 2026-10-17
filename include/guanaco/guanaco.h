@@ -253,7 +253,20 @@ private:
     long   dense_lock_fails_   = 0;         // slab allocation failures
     long   dense_uring_ops_    = 0;         // layers read via io_uring
     long   dense_pread_ops_    = 0;         // layers read via pread fallback
-    double dense_io_seconds_   = 0.0;       // cumulative time in slab reads
+    double dense_io_seconds_   = 0.0;       // cumulative time BLOCKED in slab reads
+    size_t dense_io_bytes_     = 0;         // bytes refilled into slabs
+    // Wall-clock span from first submit to final completion. Bytes/blocked-time
+    // is meaningless: async reads land during compute so blocked time collapses
+    // toward zero and the ratio explodes. This span is the honest denominator.
+    double dense_io_span_start_ = 0.0;
+    double dense_io_span_end_   = 0.0;
+    size_t dense_max_inflight_  = 0;        // peak outstanding slices in the ring
+    size_t dense_inflight_sum_  = 0;
+    size_t dense_inflight_samples_ = 0;
+    // Time an individual slice spends between submit and completion, summed.
+    // Divisor for average service time; compare against read latency to see
+    // whether the queue is the bottleneck or the device is.
+    double dense_inflight_latency_sum_ = 0.0;
     int    stream_resident_layers_ = 0;     // fixed resident subset size W (layers [0,W))
     long   dense_wait_ops_     = 0;         // ensure_layer calls that had to wait
     int    submitted_upto_     = -1;        // highest streamed layer queued to io_uring
@@ -279,6 +292,9 @@ private:
     void ensure_layer(int layer);
     void drain_inflight();
     std::unordered_map<int, int> dense_inflight_; // layer -> outstanding completions
+    // steady_clock seconds at which each in-flight layer was submitted, so
+    // completion latency can be separated from queueing delay.
+    std::unordered_map<int, double> dense_submit_time_;
 
 #ifdef GUANACO_HAVE_IO_URING
     void* uring_slab_ = nullptr;  // batched io_uring reader for slab prefetch

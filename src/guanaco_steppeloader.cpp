@@ -725,21 +725,29 @@ void SteppeLoader::advise_experts_random() {
         return;
     }
 
-    // Tell the kernel not to do sequential read-ahead on the expert mmap
-    // regions (MADV_RANDOM), and not to cache them sequentially from the fd
-    // (POSIX_FADV_RANDOM). This keeps the OS from aggressively faulting in
-    // adjacent experts we will not use, which is the whole point of routing.
+    // Readahead advice for the expert mmap regions. MADV_RANDOM (and the
+    // matching POSIX_FADV_RANDOM) disable kernel read-ahead, so an expert slice
+    // that is paged by faulting the mmap arrives one 4KB page at a time. Expert
+    // slices are large and are read whole, so that collapses paging throughput.
+    // Default to NORMAL; the router's hot set already decides what gets reused.
+    // Set GUANACO_EXPERT_ADVICE=random to restore the old behaviour.
+    const char * env = getenv("GUANACO_EXPERT_ADVICE");
+    const bool random = env != nullptr && strcmp(env, "random") == 0;
+    const int advice = random ? MADV_RANDOM : MADV_NORMAL;
+    const int fadv  = random ? POSIX_FADV_RANDOM : POSIX_FADV_NORMAL;
+
     size_t advised = 0;
     for (auto& kv : expert_tensors_) {
         ExpertTensor& t = kv.second;
         if (t.mmap_base == nullptr || t.byte_size == 0) continue;
-        madvise_range(t.mmap_base, t.byte_size, MADV_RANDOM);
-        if (posix_fadvise(fd_, (off_t)t.file_offset, (off_t)t.byte_size, POSIX_FADV_RANDOM) == 0) {
+        madvise_range(t.mmap_base, t.byte_size, advice);
+        if (posix_fadvise(fd_, (off_t)t.file_offset, (off_t)t.byte_size, fadv) == 0) {
             ++advised;
         }
     }
 
-    std::cerr << "[Guanaco Storage] Applied MADV_RANDOM / POSIX_FADV_RANDOM to " << advised
+    std::cerr << "[Guanaco Storage] Applied " << (random ? "MADV_RANDOM" : "MADV_NORMAL")
+              << " / POSIX_FADV_" << (random ? "RANDOM" : "NORMAL") << " to " << advised
               << " expert regions" << std::endl;
 }
 
@@ -838,6 +846,14 @@ void SteppeLoader::prefetch_layer(int layer) {
     if (layer < (int)layer_resident_.size() && layer_resident_[layer]) return;
     ++dense_prefetch_ops_;
 
+    // Count the bytes this refill will move so the summary can report achieved
+    // throughput. Everything else about the path is already timed; this is the
+    // one quantity that says whether we are bandwidth-bound or not.
+    size_t want_bytes = 0;
+    for (const auto& t : it->second) {
+        if (t.slab != nullptr && t.byte_size != 0) want_bytes += t.byte_size;
+    }
+
     const auto io_t0 = std::chrono::steady_clock::now();
 
 #ifdef GUANACO_HAVE_IO_URING
@@ -852,6 +868,7 @@ void SteppeLoader::prefetch_layer(int layer) {
             ++dense_uring_ops_;
             if (layer < (int)layer_resident_.size()) layer_resident_[layer] = 1;
             fadvise_drop(fd_, it->second);
+            dense_io_bytes_ += want_bytes;
             dense_io_seconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_t0).count();
             return;
         }
@@ -875,6 +892,7 @@ void SteppeLoader::prefetch_layer(int layer) {
     }
     fadvise_drop(fd_, it->second);
     if (layer < (int)layer_resident_.size()) layer_resident_[layer] = 1;
+    dense_io_bytes_ += want_bytes;
     dense_io_seconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_t0).count();
 }
 
@@ -908,6 +926,27 @@ bool SteppeLoader::submit_layer_async(int layer) {
     }
     dense_inflight_[layer] = n;
     ++dense_uring_ops_;
+
+    // Track the wall-clock span of streaming and how deep the ring actually
+    // runs. Blocked-time accounting hides the async case entirely, so depth
+    // here is what distinguishes "queue not full" from "device is the limit".
+    const double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (dense_io_span_start_ == 0.0) {
+        dense_io_span_start_ = now;
+    }
+    dense_submit_time_[layer] = now;
+
+    size_t outstanding = 0;
+    for (const auto & kv : dense_inflight_) {
+        outstanding += (size_t) kv.second;
+    }
+    if (outstanding > dense_max_inflight_) {
+        dense_max_inflight_ = outstanding;
+    }
+    dense_inflight_sum_ += outstanding;
+    ++dense_inflight_samples_;
+
     return true;
 #else
     (void) layer;
@@ -933,6 +972,16 @@ void SteppeLoader::ensure_layer(int layer) {
             if (res < 0) all_ok = false;
             auto h = dense_inflight_.find((int)tok);
             if (h != dense_inflight_.end()) {
+                // Service time: submit -> completion, summed over slices. If
+                // this is near device latency the ring is deep enough and the
+                // device is the limit; if it is far larger, reads are queueing.
+                auto st = dense_submit_time_.find((int)tok);
+                if (st != dense_submit_time_.end()) {
+                    dense_inflight_latency_sum_ +=
+                        std::chrono::duration<double>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count() - st->second;
+                    dense_submit_time_.erase(st);
+                }
                 if (--h->second <= 0) {
                     dense_inflight_.erase(h);
                 }
@@ -943,6 +992,9 @@ void SteppeLoader::ensure_layer(int layer) {
             if (layer < (int)layer_resident_.size()) layer_resident_[layer] = 1;
             auto it = stream_layers_.find(layer);
             if (it != stream_layers_.end()) fadvise_drop(fd_, it->second);
+            for (const auto& t : it->second) {
+                if (t.slab != nullptr && t.byte_size != 0) dense_io_bytes_ += t.byte_size;
+            }
             dense_io_seconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
             return;
         }
@@ -969,7 +1021,12 @@ void SteppeLoader::drain_inflight() {
         }
     }
 #endif
+    if (dense_inflight_.empty() && dense_io_span_start_ > 0.0 && dense_io_span_end_ == 0.0) {
+        dense_io_span_end_ = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
     dense_inflight_.clear();
+    dense_submit_time_.clear();
 }
 
 // Eviction advice for streamed slabs.
@@ -1089,7 +1146,6 @@ void SteppeLoader::evict_layer(int layer) {
 void SteppeLoader::fill_resident_layers() {
     if (!dense_enabled_ || stream_layers_.empty()) return;
     const int n_layers = stream_n_layers_;
-    size_t avg_layer = (n_layers > 0) ? stream_total_bytes_ / (size_t)n_layers : 0;
     int w = n_layers;
     const bool hybrid = enabled_ && !expert_tensors_.empty();
 
@@ -1106,13 +1162,36 @@ void SteppeLoader::fill_resident_layers() {
         expert_budget_bytes_ = expert_share;
     }
 
-    if (pager_budget > 0 && avg_layer > 0) {
-        w = (int)(pager_budget / avg_layer);
+    // Walk layers and accumulate real per-layer bytes. Dividing the budget by an
+    // average over-counts whenever layers are lumpy: w layers are really
+    // prefetched, so a model with uneven layers runs straight past the budget and
+    // gets dumped into RAM. Take the largest prefix that genuinely fits instead.
+    // Layer 0 is always taken - the first pass needs it resident.
+    size_t used = 0;
+    w = 0;
+    for (int L = 0; L < n_layers; ++L) {
+        size_t layer_bytes = 0;
+        auto it = stream_layers_.find(L);
+        if (it != stream_layers_.end()) {
+            for (const auto & t : it->second) layer_bytes += t.byte_size;
+        }
+        if (pager_budget > 0 && w > 0 && used + layer_bytes > pager_budget) break;
+        used += layer_bytes;
+        ++w;
     }
     if (w < 1) w = 1; // the first forward pass needs layer 0 resident
     if (w > n_layers) w = n_layers;
     stream_resident_layers_ = w;
-    stream_resident_bytes_ = (size_t) w * avg_layer;
+
+    // Report the real bytes behind the prefix, not w * average.
+    size_t resident_bytes = 0;
+    for (int L = 0; L < w; ++L) {
+        auto it = stream_layers_.find(L);
+        if (it == stream_layers_.end()) continue;
+        for (const auto & t : it->second) resident_bytes += t.byte_size;
+    }
+    stream_resident_bytes_ = resident_bytes;
+
     for (int L = 0; L < w; ++L) {
         prefetch_layer(L);
     }
@@ -1753,6 +1832,16 @@ void SteppeLoader::log_final_summary() {
 
     if (dense_enabled_) {
         const size_t mib = stream_total_bytes_ / (1024 * 1024);
+        // Wall-clock of the whole streaming window, not blocked time. If the
+        // span never closed, fall back to now so a still-running stream
+        // reports something honest rather than zero.
+        const double now_s = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        double io_span = dense_io_span_end_ > dense_io_span_start_
+                ? dense_io_span_end_ - dense_io_span_start_ : 0.0;
+        if (io_span <= 0.0 && dense_io_span_start_ > 0.0) {
+            io_span = now_s - dense_io_span_start_;
+        }
         std::cerr << "[Guanaco Pager] final: dense slab-stream, "
                   << stream_layers_.size() << " layers / " << mib << " MB, "
                   << "resident=" << stream_resident_layers_ << " layers, "
@@ -1762,6 +1851,14 @@ void SteppeLoader::log_final_summary() {
                   << dense_lock_fails_ << " slab-allocs-failed, "
                   << dense_uring_ops_ << " uring / " << dense_pread_ops_ << " pread, "
                   << "io=" << (long)dense_io_seconds_ << "s"
+                  << ", span=" << (long)(io_span * 1000.0) << "ms"
+                  << ", ioMB/s=" << (long)(io_span > 0.0
+                        ? (double)dense_io_bytes_ / (1024.0 * 1024.0) / io_span
+                        : 0.0)
+                  << ", depth=" << dense_max_inflight_
+                  << "/" << (dense_inflight_samples_ ? dense_inflight_sum_ / dense_inflight_samples_ : 0)
+                  << ", svc=" << (long)(dense_inflight_latency_sum_ * 1000.0 / (double)(dense_uring_ops_ ? dense_uring_ops_ : 1))
+                  << "ms"
                   << ", ahead=" << config_.dense_prefetch_ahead
                   << ", evict=" << dense_evict_name()
                   << ", waits=" << dense_wait_ops_
