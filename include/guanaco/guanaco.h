@@ -167,6 +167,10 @@ public:
     // Called once after all dense tensors are registered so the first token
     // finds its weights resident.
     void fill_resident_layers();
+    // Allocate private slabs for the layer-window tensors. Called from
+    // fill_resident_layers() once the model size is known, so the
+    // model-over-budget decision can be made before any slab exists.
+    void allocate_stream_slabs();
 
     // Pointer to the mmap base recorded for a registered expert tensor.
     void*  get_expert_tensor_data(const std::string& name);
@@ -508,6 +512,12 @@ void  io_uring_slab_destroy(void* ctx);
 // io_uring_slab_reap. Lets the caller overlap reads with compute.
 int  io_uring_slab_submit(void* ctx, int fd, const std::vector<IoUringSlice>& slices, int64_t token);
 bool io_uring_slab_reap(void* ctx, int64_t* token, int* res);
+
+// Ring telemetry. Bounds the reap wait so a producer can keep the queue fed
+// instead of blocking in the kernel, and reports occupancy so a shallow queue
+// can be told apart from a saturated device. 0 ms restores the unbounded wait.
+int         io_uring_slab_set_reap_timeout(int ms);
+const char* io_uring_slab_stats_line();
 #endif
 
 } // namespace guanaco

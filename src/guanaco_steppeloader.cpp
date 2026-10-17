@@ -31,7 +31,14 @@ SteppeLoader::SteppeLoader(const SteppeLoaderConfig& config) : config_(config) {
     if (config_.use_io_uring) {
         uring_slab_ = io_uring_slab_create(config_.io_queue_depth);
         if (uring_slab_) {
-            std::cerr << "[Guanaco Storage] io_uring prefetch enabled (queue=" << config_.io_queue_depth << ")\n";
+            // Bounded reap wait: a blocking reap can sit in the kernel with the
+            // producer unable to queue, which caps in-flight depth. GUANACO_REAP_MS
+            // tunes it so the two arms can be compared.
+            const char * reap_env = getenv("GUANACO_REAP_MS");
+            const int reap_ms = reap_env != nullptr ? atoi(reap_env) : 0;
+            io_uring_slab_set_reap_timeout(reap_ms);
+            std::cerr << "[Guanaco Storage] io_uring prefetch enabled (queue="
+                      << config_.io_queue_depth << ", reap_timeout=" << reap_ms << "ms)\n";
         } else {
             std::cerr << "[Guanaco Storage] io_uring init failed; falling back to pread\n";
         }
@@ -564,19 +571,9 @@ bool SteppeLoader::parse_gguf_metadata() {
                   << config_.dense_prefetch_ahead << " layers)\n";
     }
 
-    // A private anonymous slab is unreclaimable without swap. It is the right
-    // trade only when the model FITS the budget: DONTNEED then really frees,
-    // and the refill costs a zero-fill. For a model far larger than RAM - the
-    // case this whole project exists for - anonymous slabs are fatal, because
-    // the kernel cannot drop them and simply OOMs. Those must stay on the file
-    // mmap, where clean pages are reclaimable and re-fault from NVMe on demand.
-    // In hybrid mode the expert tensors already page that way, so keep the
-    // non-expert tensors there too instead of redirecting t->data at a slab.
-    if (dense_enabled_ && model_config_.num_experts > 1 && config_.dense_use_slab) {
-        config_.dense_use_slab = false;
-        std::cerr << "[Guanaco Storage] MoE + budget: paging the file mmap directly,\n"
-                  << "[Guanaco Storage] not private slabs (anonymous pages are unreclaimable).\n";
-    }
+    // NOTE: the private-slab decision is made in fill_resident_layers(), not here.
+    // It depends on stream_total_bytes_, which is only final once every tensor
+    // has been registered - long after this config pass runs.
 
     if (model_config_.num_experts <= 1) {
         // No routing to exploit: never mistake a dense FFN tensor for a
@@ -804,16 +801,33 @@ void SteppeLoader::register_stream_tensor(const std::string& name, int layer,
     t.file_offset = file_offset;
     t.byte_size   = byte_size;
     t.mmap_base   = mmap_base;
-    if (config_.dense_use_slab) {
-        t.slab     = alloc_slab(byte_size);
-        t.slab_len = t.slab ? page_align(byte_size) : 0;
-    }
+    // Slab allocation is deferred to allocate_stream_slabs(), which runs from
+    // fill_resident_layers() once the full model size is known. Deciding here
+    // would use a running total and get dense-over-budget models wrong.
     vec.push_back(std::move(t));
     stream_total_bytes_ += byte_size;
     if (layer + 1 > stream_n_layers_) {
         stream_n_layers_ = layer + 1;
         layer_resident_.resize((size_t)stream_n_layers_, 0);
     }
+}
+
+// Allocate the private slabs, now that the model-over-budget decision has been
+// made. Must run before any prefetch_layer() and before llama.cpp redirects
+// t->data at the slabs.
+void SteppeLoader::allocate_stream_slabs() {
+    if (!config_.dense_use_slab) return;
+    size_t n_slabs = 0;
+    for (auto & kv : stream_layers_) {
+        for (auto & t : kv.second) {
+            if (t.slab != nullptr || t.byte_size == 0) continue;
+            t.slab     = alloc_slab(t.byte_size);
+            t.slab_len = t.slab ? page_align(t.byte_size) : 0;
+            if (t.slab != nullptr) ++n_slabs;
+        }
+    }
+    std::cerr << "[Guanaco Storage] allocated " << n_slabs << " private slabs"
+              << " (" << (stream_total_bytes_ / (1024 * 1024)) << " MB reserved)\n";
 }
 
 void* SteppeLoader::get_stream_tensor_data(const std::string& name) {
@@ -1021,10 +1035,6 @@ void SteppeLoader::drain_inflight() {
         }
     }
 #endif
-    if (dense_inflight_.empty() && dense_io_span_start_ > 0.0 && dense_io_span_end_ == 0.0) {
-        dense_io_span_end_ = std::chrono::duration<double>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-    }
     dense_inflight_.clear();
     dense_submit_time_.clear();
 }
@@ -1147,6 +1157,34 @@ void SteppeLoader::fill_resident_layers() {
     if (!dense_enabled_ || stream_layers_.empty()) return;
     const int n_layers = stream_n_layers_;
     int w = n_layers;
+
+    // A private anonymous slab is unreclaimable without swap. It is the right
+    // trade only when the model FITS the budget: DONTNEED then really frees and
+    // the refill costs a zero-fill. For a model far larger than RAM - the case
+    // this whole project exists for - anonymous slabs are fatal, because the
+    // kernel cannot drop them and compresses them into swap instead. Such
+    // models must stay on the file mmap, where clean pages are reclaimable and
+    // re-fault from NVMe on demand.
+    //
+    // This keys on exceeding the budget, NOT on MoE-vs-dense. The previous
+    // `num_experts > 1` test left dense models on the anonymous path even when
+    // 4x over budget: the pager reported a correct resident subset while 50+
+    // layers of slabs filled RAM and were compressed into zram. That presents
+    // as no NVMe activity at all and glacial throughput, which reads exactly
+    // like "not streaming". Dense exceeding RAM is the primary case for this
+    // project, so it takes the file mmap path too.
+    if (config_.dense_use_slab && config_.dense_budget_bytes > 0 &&
+        stream_total_bytes_ > config_.dense_budget_bytes) {
+        config_.dense_use_slab = false;
+        std::cerr << "[Guanaco Storage] Model exceeds budget ("
+                  << (stream_total_bytes_ / (1024 * 1024)) << " MB > "
+                  << (config_.dense_budget_bytes / (1024 * 1024)) << " MB): paging the file mmap\n"
+                  << "[Guanaco Storage] directly, not private slabs (anonymous pages are unreclaimable).\n";
+    }
+
+    // Slabs must exist before prefetch_layer() below, and llama.cpp redirects
+    // t->data at them afterwards.
+    allocate_stream_slabs();
     const bool hybrid = enabled_ && !expert_tensors_.empty();
 
     // In hybrid mode the budget has to be SPLIT, not consumed by whichever path
@@ -1832,16 +1870,12 @@ void SteppeLoader::log_final_summary() {
 
     if (dense_enabled_) {
         const size_t mib = stream_total_bytes_ / (1024 * 1024);
-        // Wall-clock of the whole streaming window, not blocked time. If the
-        // span never closed, fall back to now so a still-running stream
-        // reports something honest rather than zero.
+        // Whole streaming window: first submit to shutdown. Not closed at each
+        // drain, because drains happen every pass and closing there would
+        // measure only the first window.
         const double now_s = std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        double io_span = dense_io_span_end_ > dense_io_span_start_
-                ? dense_io_span_end_ - dense_io_span_start_ : 0.0;
-        if (io_span <= 0.0 && dense_io_span_start_ > 0.0) {
-            io_span = now_s - dense_io_span_start_;
-        }
+        double io_span = dense_io_span_start_ > 0.0 ? now_s - dense_io_span_start_ : 0.0;
         std::cerr << "[Guanaco Pager] final: dense slab-stream, "
                   << stream_layers_.size() << " layers / " << mib << " MB, "
                   << "resident=" << stream_resident_layers_ << " layers, "
@@ -1850,6 +1884,7 @@ void SteppeLoader::log_final_summary() {
                   << dense_evict_ops_ << " evictions, "
                   << dense_lock_fails_ << " slab-allocs-failed, "
                   << dense_uring_ops_ << " uring / " << dense_pread_ops_ << " pread, "
+                  << "[" << io_uring_slab_stats_line() << "]"
                   << "io=" << (long)dense_io_seconds_ << "s"
                   << ", span=" << (long)(io_span * 1000.0) << "ms"
                   << ", ioMB/s=" << (long)(io_span > 0.0

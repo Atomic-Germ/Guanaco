@@ -11,6 +11,13 @@ option(GUANACO_BUILD_EXAMPLES "Build example programs" ON)
 option(GUANACO_BUILD_TESTS "Build tests" OFF)
 option(GUANACO_PATCH_LLAMA_CPP "Apply Guanaco patches to llama.cpp" ON)
 
+# GPU-pill, UMA buffer types and the Vulkan patches are the core of this project.
+# Upstream defaults GGML_VULKAN OFF, so a plain `cmake -S . -B build` silently
+# produces a CPU-only binary that exercises none of them. Default it ON: someone
+# without Vulkan should have to disable it deliberately.
+set(GGML_VULKAN ON CACHE BOOL "Vulkan backend (Guanaco gpu-pill and UMA paths require it)")
+option(GUANACO_REQUIRE_VULKAN "Fail configuration when the Vulkan backend is unavailable" ON)
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic -Wno-unused-parameter")
 endif()
@@ -186,6 +193,11 @@ endif()
 
 # === Build llama.cpp as a subdirectory ===
 # Enable tools and server so they link against the patched libllama
+if(GUANACO_REQUIRE_VULKAN AND NOT GGML_VULKAN)
+    message(FATAL_ERROR
+        "Guanaco needs the Vulkan backend for gpu-pill and UMA buffer types.\n"
+        "Re-run with -DGGML_VULKAN=ON, or -DGUANACO_REQUIRE_VULKAN=OFF to build CPU-only.")
+endif()
 set(LLAMA_BUILD_COMMON ON  CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TOOLS  ON  CACHE BOOL "" FORCE)

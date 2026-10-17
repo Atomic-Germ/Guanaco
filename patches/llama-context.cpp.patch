@@ -1,5 +1,5 @@
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 7e6974431..417c53c02 100644
+index 7e6974431..37de24c87 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -1,5 +1,6 @@
@@ -50,7 +50,7 @@ index 7e6974431..417c53c02 100644
  struct llm_fused_op_probe {
      llm_fused_op op;
      const char * name;
-@@ -277,6 +303,52 @@ llama_context::llama_context(
+@@ -277,6 +303,43 @@ llama_context::llama_context(
      cparams.kv_unified     = params.kv_unified;
      cparams.moe_cache_size = params.moe_cache_size;
  
@@ -91,19 +91,10 @@ index 7e6974431..417c53c02 100644
 +        cparams.op_offload = true;
 +    }
 +
-+    // GPU-pill: allocate weight tensors into UMA host-visible memory so the
-+    // GPU can read them directly without PCIe copies. This is a silent upgrade
-+    // for gpu_pill users on UMA systems.
-+    if (cparams.gpu_pill) {
-+        auto * model_base = const_cast<llama_model_base *>(static_cast<const llama_model_base *>(&model));
-+        model_base->gpu_pill_active = true;
-+        model_base->allocate_uma_weights();
-+    }
-+
      // initialized later
      cparams.pipeline_parallel = false;
      cparams.training = false;
-@@ -317,6 +389,7 @@ llama_context::llama_context(
+@@ -317,6 +380,7 @@ llama_context::llama_context(
      LLAMA_LOG_INFO("%s: causal_attn           = %d\n",   __func__, cparams.causal_attn);
      LLAMA_LOG_INFO("%s: flash_attn            = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
      LLAMA_LOG_INFO("%s: kv_unified            = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
@@ -111,7 +102,7 @@ index 7e6974431..417c53c02 100644
      LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
      LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
      LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
-@@ -393,6 +466,7 @@ llama_context::llama_context(
+@@ -393,6 +457,7 @@ llama_context::llama_context(
          llama_memory_params params_mem = {
              /*.type_k    =*/ params.type_k,
              /*.type_v    =*/ params.type_v,
@@ -119,7 +110,7 @@ index 7e6974431..417c53c02 100644
              /*.swa_full  =*/ params.swa_full,
              /*.ctx_type  =*/ cparams.ctx_type,
              /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
-@@ -469,6 +543,10 @@ llama_context::llama_context(
+@@ -469,6 +534,10 @@ llama_context::llama_context(
              moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
          }
  
@@ -130,7 +121,7 @@ index 7e6974431..417c53c02 100644
          sched_reserve();
  
          if (!cparams.flash_attn) {
-@@ -3876,6 +3954,7 @@ llama_context_params llama_context_default_params() {
+@@ -3876,6 +3945,7 @@ llama_context_params llama_context_default_params() {
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
          /*.moe_cache_size              =*/ 0,
@@ -138,7 +129,7 @@ index 7e6974431..417c53c02 100644
          /*.abort_callback              =*/ nullptr,
          /*.abort_callback_data         =*/ nullptr,
          /*.embeddings                  =*/ false,
-@@ -3893,13 +3972,65 @@ llama_context_params llama_context_default_params() {
+@@ -3893,13 +3963,65 @@ llama_context_params llama_context_default_params() {
  }
  
  llama_context * llama_init_from_model(

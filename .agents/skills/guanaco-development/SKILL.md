@@ -150,6 +150,33 @@ architecture was sound the whole time; the comment was not.
   upstream's assumptions at the time of writing.
 - When a probe overturns a conclusion, correct the comment as part of the fix.
 
+### Measured, Do Not Re-derive
+
+Verified on kernel 7.2.10-300.fc45, single-channel 48GB, NVMe, with the
+`ioMB/s`, `depth`, and `svc` counters added to the pager summary line.
+
+- **Streaming is device-bound, not software-bound.** At a 4GB budget on a dense
+  27B the pager moves 1.52 TB at 2973-3035 MB/s, and generation lands at
+  0.20 t/s against a predicted 0.202. The pager achieves essentially all
+  available bandwidth; the only levers are bytes moved and read speed.
+- **The in-flight queue is not the bottleneck.** `depth=68/63` against a
+  256-deep ring is `ahead=8 layers x ~8 slices`, a design consequence, not a
+  limit. `sqfull=0` means the submission ring never filled, and `timeouts=0`
+  across 43411 reaps means the reap loop is never idle. A bounded-timeout reap
+  arm is byte-identical to a blocking one.
+- **~3 GB/s is this machine.** `dd` with `O_DIRECT` reaches 4.0 GB/s in a single
+  sequential stream; 63 concurrent scattered 298MB reads deliver ~3.0 GB/s on one
+  memory channel shared by CPU, GPU and NVMe. Treat 3 GB/s as the hardware
+  ceiling here, not a target. Someone on a dual-channel machine should stream
+  measurably faster with no code change.
+- **`depth`/`svc` are only meaningful beside `sqfull` and `timeouts`.** A depth
+  reading on its own is indistinguishable from a design-shaped depth.
+
+Counters that make the above auditable, printed in the `[Guanaco Pager] final:`
+line: `ioMB/s` (bytes over the whole streaming span, not blocked time),
+`span`, `depth=<peak>/<avg>`, `svc` (submit to completion), and a
+`[reap= waits= timeouts= hard= sqe= sqfull= peak=]` ring block.
+
 ## The Premise: Bigger Than RAM
 
 The project's purpose is running models far larger than total RAM plus swap.
