@@ -23,9 +23,9 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install Deps
-      uses: daaku/gh-action-apt-install@v4
+      uses: dsx137/deb-cache@v1.0.0
       with:
-        packages: glslc libshaderc1 liburing-dev liburing2 libvulkan-dev spirv-headers
+        PACKAGES: glslc libshaderc1 liburing-dev liburing2 libvulkan-dev spirv-headers
 
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
