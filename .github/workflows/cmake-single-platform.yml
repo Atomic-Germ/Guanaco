@@ -25,7 +25,7 @@ jobs:
     - name: Install Deps
       uses: daaku/gh-action-apt-install@v4
       with:
-        packages: libvulkan-dev glslc liburing-dev 
+        packages: libvulkan-dev glslc liburing-dev spirv-headers
 
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
