@@ -1,5 +1,5 @@
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 463510caa..99026772a 100644
+index 463510caa..658659b79 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -4,6 +4,7 @@
@@ -16,7 +16,7 @@ index 463510caa..99026772a 100644
  
 +using ggml_backend_vk_get_uma_buffer_type_t = ggml_backend_buffer_type_t (*)(ggml_backend_dev_t dev);
 +
-+static ggml_backend_buffer_type_t ggml_backend_dev_get_uma_buft(ggml_backend_dev_t dev) {
++ggml_backend_buffer_type_t ggml_backend_dev_get_uma_buft(ggml_backend_dev_t dev) {
 +    if (!dev) {
 +        return nullptr;
 +    }

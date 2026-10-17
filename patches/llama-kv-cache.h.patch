@@ -1,8 +1,25 @@
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 9bfb8f231..93b4edd6a 100644
+index 9bfb8f231..b973762e6 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
-@@ -104,6 +104,7 @@ public:
+@@ -8,11 +8,16 @@
+ #include <unordered_map>
+ #include <vector>
+ 
++#include "ggml-backend.h"
++
+ struct llama_cparams;
+ struct llama_hparams;
+ struct llama_model;
+ struct llama_context;
+ 
++// Shared helper: get the UMA buffer type for a device (returns nullptr if not UMA)
++ggml_backend_buffer_type_t ggml_backend_dev_get_uma_buft(ggml_backend_dev_t dev);
++
+ //
+ // llama_kv_cache
+ //
+@@ -104,6 +109,7 @@ public:
                           bool   v_trans,
                           bool   offload,
                           bool   unified,
