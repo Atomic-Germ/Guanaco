@@ -1,8 +1,21 @@
 diff --git a/common/common.h b/common/common.h
-index d89f803af..6b9ca8233 100644
+index d89f803af..067d7560b 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -485,6 +485,9 @@ struct common_params {
+@@ -80,6 +80,12 @@ struct common_cpu_params {
+ int32_t common_cpu_get_num_physical_cores();
+ int32_t common_cpu_get_num_math();
+ 
++// size_t common_get_available_ram();
++size_t common_get_total_ram();
++#ifdef GUANACO_ENABLED
++bool    common_params_guanaco_resolve_defaults(struct common_params & params);
++#endif
++
+ //
+ // Common params
+ //
+@@ -485,6 +491,9 @@ struct common_params {
      // margin per device in bytes for fitting parameters to free memory:
      std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
  
@@ -12,7 +25,7 @@ index d89f803af..6b9ca8233 100644
      enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
      enum llama_load_mode  load_mode  = LLAMA_LOAD_MODE_AUTO; // how to load the model
  
-@@ -588,6 +591,18 @@ struct common_params {
+@@ -588,6 +597,25 @@ struct common_params {
      bool no_host           = false; // bypass host buffer allowing extra buffers to be used
      bool load_mtp          = false; // load MTP/NextN layers
  
@@ -26,6 +39,13 @@ index d89f803af..6b9ca8233 100644
 +    bool   guanaco_imatrix       = true;  // seed hot pins from <model>.imatrix.gguf
 +    int32_t guanaco_dense_budget_mb = 0;  // dense layer-window RAM budget in MiB (0 = off)
 +    int32_t guanaco_dense_ahead     = 3;  // dense streaming: layers to prefetch ahead
++    // Derive streaming / budget from available RAM when the user set neither.
++    bool   guanaco_auto = true;
++    double guanaco_auto_load_fraction = 0.80;  // engage streaming above this share of RAM
++    double guanaco_auto_ram_fraction  = 0.70;  // budget ceiling as a share of available RAM
++    // Cleared by an explicit --guanaco-dense-budget so the loader does not
++    // derive one behind the user's back.
++    bool   guanaco_dense_budget_auto = true;
 +    std::string guanaco_affinity = "";    // expert-affinity warmup prompt (empty = disabled)
 +
      bool single_turn       = false; // single turn chat conversation

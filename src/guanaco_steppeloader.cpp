@@ -18,6 +18,11 @@
 #include <string>
 #include <chrono>
 
+#if defined(__linux__)
+#include <cstdio>
+#include <cstring>
+#endif
+
 // imatrix prior: read a sibling "<model>.imatrix.gguf". This must be the same
 // header src/imatrix-loader.cpp compiles against - including the upstream copy
 // instead gives the two translation units different layouts for common_imatrix
@@ -25,6 +30,88 @@
 #include "imatrix-loader.h"
 
 namespace guanaco {
+
+// RAM this process may actually use: MemAvailable clamped by any cgroup limit.
+// System-wide MemAvailable is badly wrong inside a container or a systemd unit -
+// a 12 GB limit on a 64 GB host still reports most of the host, and a budget
+// derived from it is several times larger than the process can ever obtain.
+// The failure mode is an immediate OOM, not a slowdown.
+static size_t guanaco_cgroup_memory_limit() {
+#if defined(__linux__)
+    {
+        FILE * f = fopen("/proc/self/cgroup", "r");
+        if (f != nullptr) {
+            char line[512];
+            char path[512] = {0};
+            while (fgets(line, sizeof(line), f)) {
+                if (strncmp(line, "0::", 3) == 0) {
+                    snprintf(path, sizeof(path), "/sys/fs/cgroup%s", line + 3);
+                    path[strcspn(path, "\n")] = '\0';
+                    break;
+                }
+            }
+            fclose(f);
+            if (path[0] != '\0') {
+                char file[640];
+                snprintf(file, sizeof(file), "%s/memory.max", path);
+                f = fopen(file, "r");
+                if (f != nullptr) {
+                    char v[64] = {0};
+                    const bool ok = fgets(v, sizeof(v), f) != nullptr;
+                    fclose(f);
+                    if (ok && strncmp(v, "max", 3) != 0) {
+                        return (size_t) strtoull(v, nullptr, 10);
+                    }
+                }
+            }
+        }
+    }
+    {
+        FILE * f = fopen("/sys/fs/cgroup/memory/memory.limit_in_bytes", "r");
+        if (f != nullptr) {
+            char v[64] = {0};
+            const bool ok = fgets(v, sizeof(v), f) != nullptr;
+            fclose(f);
+            if (ok) {
+                const size_t lim = (size_t) strtoull(v, nullptr, 10);
+                if (lim > 0 && lim < ((size_t) 1 << 60)) {
+                    return lim;
+                }
+            }
+        }
+    }
+#endif
+    return 0;
+}
+
+// RAM the kernel believes is available for new allocations, clamped by any
+// cgroup limit. Returns 0 if unknown.
+//
+// MemAvailable, not MemFree: the resident file cache Guanaco pages weights
+// through already counts as used, so MemFree would understate the budget after
+// the first run and shrink it on the next.
+static size_t guanaco_available_ram() {
+#if defined(__linux__)
+    FILE * f = fopen("/proc/meminfo", "r");
+    if (f == nullptr) {
+        return 0;
+    }
+    char line[256];
+    size_t kb = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "MemAvailable:", 13) == 0) {
+            kb = (size_t) strtoull(line + 13, nullptr, 10);
+            break;
+        }
+    }
+    fclose(f);
+    const size_t avail = kb * 1024;
+    const size_t limit = guanaco_cgroup_memory_limit();
+    return (limit != 0 && limit < avail) ? limit : avail;
+#else
+    return 0;
+#endif
+}
 
 SteppeLoader::SteppeLoader(const SteppeLoaderConfig& config) : config_(config) {
     dense_budget_bytes_ = config_.dense_budget_bytes;
@@ -571,11 +658,33 @@ bool SteppeLoader::parse_gguf_metadata() {
     // budget is given we run both: experts keep their granularity, and the
     // layer-window pager owns the remainder so the budget actually binds.
     const bool want_budget = config_.dense_streaming && config_.dense_budget_bytes > 0;
-    if (want_budget) {
+
+    // Auto budget: the amount can only be derived once every dense tensor is
+    // registered and stream_total_bytes_ is final, but registration itself is
+    // gated on dense_enabled_ (a dense FFN tensor must not be mistaken for a
+    // 1-expert block). So enable the path optimistically for a pure-dense model
+    // and resolve the amount in fill_resident_layers(). If the model turns out
+    // to fit, the budget stays 0 and every layer is resident - which is the
+    // correct outcome, not a fallback.
+    //
+    // Only for num_experts <= 1. On a hybrid the budget is split to give the
+    // experts a byte ceiling, and enforce_expert_byte_ceiling() evicts pinned
+    // slices to stay under it, so it must never be invented here.
+    const bool auto_budget = config_.dense_budget_auto
+        && config_.dense_budget_bytes == 0
+        && model_config_.num_experts <= 1;
+
+    if (want_budget || auto_budget) {
         dense_enabled_ = true;
-        std::cerr << "[Guanaco Storage] layer-window streaming requested (budget="
-                  << (config_.dense_budget_bytes / (1024 * 1024)) << " MB, prefetch ahead="
-                  << config_.dense_prefetch_ahead << " layers); mechanism decided after load\n";
+        if (want_budget) {
+            std::cerr << "[Guanaco Storage] layer-window streaming requested (budget="
+                      << (config_.dense_budget_bytes / (1024 * 1024)) << " MB, prefetch ahead="
+                      << config_.dense_prefetch_ahead << " layers); mechanism decided after load\n";
+        } else {
+            std::cerr << "[Guanaco Storage] dense model detected; layer-window streaming enabled "
+                         "with an automatic RAM budget (prefetch ahead="
+                      << config_.dense_prefetch_ahead << " layers)\n";
+        }
     }
 
     // NOTE: the private-slab decision is made in fill_resident_layers(), not here.
@@ -1181,7 +1290,36 @@ void SteppeLoader::evict_layer(int layer) {
     if (layer < (int)layer_resident_.size()) layer_resident_[layer] = 0;
 }
 
+void SteppeLoader::resolve_dense_budget_auto() {
+    if (!config_.dense_budget_auto || config_.dense_budget_bytes != 0) {
+        return;
+    }
+    // Expert tensors present means MoE or hybrid. On a hybrid the budget is
+    // split to give the experts a byte ceiling, and enforce_expert_byte_ceiling()
+    // evicts pinned slices to stay under it - so deriving the budget here would
+    // silently shrink the expert cache. Leave it to the user for any MoE model.
+    if (!expert_tensors_.empty()) {
+        return;
+    }
+    const size_t ram = guanaco_available_ram();
+    if (ram == 0) {
+        return;
+    }
+    const size_t budget = (size_t) (ram * config_.dense_budget_ram_fraction);
+    if (stream_total_bytes_ <= budget) {
+        // Fits comfortably. Paging it would only add machinery for nothing.
+        return;
+    }
+    config_.dense_budget_bytes = budget;
+    dense_budget_bytes_         = budget;
+    std::cerr << "[Guanaco Storage] dense budget not set; deriving "
+              << (budget / (1024 * 1024)) << " MB from " << (ram / (1024 * 1024))
+              << " MB available RAM (" << (int) (config_.dense_budget_ram_fraction * 100)
+              << "%); model is " << (stream_total_bytes_ / (1024 * 1024)) << " MB\n";
+}
+
 void SteppeLoader::fill_resident_layers() {
+    resolve_dense_budget_auto();
     if (!dense_enabled_ || stream_layers_.empty()) return;
     const int n_layers = stream_n_layers_;
     int w = n_layers;

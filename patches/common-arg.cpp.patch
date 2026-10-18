@@ -1,5 +1,5 @@
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 7c1b81e0f..050957ff7 100644
+index 7c1b81e0f..c4026d602 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -399,6 +399,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
@@ -22,7 +22,20 @@ index 7c1b81e0f..050957ff7 100644
      if (!plan.preset.local_path.empty()) {
          tasks.emplace_back(plan.preset, opts, [&]() {
              // if HF repo is a preset repo, we simply run server in router mode with the preset.ini file
-@@ -2413,6 +2419,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -1310,6 +1316,12 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
+             exit(0);
+         }
+         params.lr.init();
++
++#ifdef GUANACO_ENABLED
++        // Must run before common_model_params_to_llama(), which forces
++        // n_gpu_layers=0 when streaming is on.
++        common_params_guanaco_resolve_defaults(params);
++#endif
+     } catch (const std::invalid_argument & ex) {
+         fprintf(stderr, "%s\n", ex.what());
+         ctx_arg.params = params_org;
+@@ -2413,6 +2425,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.grp_attn_w = value;
          }
      ).set_env("LLAMA_ARG_GRP_ATTN_W").set_examples({LLAMA_EXAMPLE_COMPLETION}));
@@ -38,7 +51,7 @@ index 7c1b81e0f..050957ff7 100644
      add_opt(common_arg(
          {"-kvo", "--kv-offload"},
          {"-nkvo", "--no-kv-offload"},
-@@ -2690,6 +2705,71 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2690,6 +2711,104 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              GGML_UNUSED(params);
          }
      ).set_env("LLAMA_ARG_RPC"));
@@ -98,6 +111,9 @@ index 7c1b81e0f..050957ff7 100644
 +        string_format("RAM budget in MiB for dense layer-window streaming (0 = off, default: %d)", params.guanaco_dense_budget_mb),
 +        [](common_params & params, int value) {
 +            params.guanaco_dense_budget_mb = value;
++            // An explicit budget is authoritative, including an explicit 0,
++            // which means "dense paging off".
++            params.guanaco_dense_budget_auto = false;
 +        }
 +    ).set_env("LLAMA_ARG_GUANACO_DENSE_BUDGET"));
 +    add_opt(common_arg(
@@ -107,10 +123,40 @@ index 7c1b81e0f..050957ff7 100644
 +            params.guanaco_dense_ahead = value;
 +        }
 +    ).set_env("LLAMA_ARG_GUANACO_DENSE_AHEAD"));
++    add_opt(common_arg(
++        {"-gau", "--guanaco-auto"}, {"-ngau", "--no-guanaco-auto"},
++        string_format("derive streaming and RAM budget from available memory when unset (default: %s)",
++            params.guanaco_auto ? "enabled" : "disabled"),
++        [](common_params & params, bool value) {
++            params.guanaco_auto = value;
++        }
++    ).set_env("LLAMA_ARG_GUANACO_AUTO"));
++    add_opt(common_arg(
++        {"-gaulf", "--guanaco-auto-load-fraction"}, "F",
++        string_format("engage streaming when the model exceeds this share of available RAM (default: %.2f)",
++            params.guanaco_auto_load_fraction),
++        [](common_params & params, const std::string & value) {
++            const float f = std::stof(value);
++            if (f > 0.0f && f <= 1.0f) {
++                params.guanaco_auto_load_fraction = f;
++            }
++        }
++    ).set_env("LLAMA_ARG_GUANACO_AUTO_LOAD_FRACTION"));
++    add_opt(common_arg(
++        {"-garf", "--guanaco-auto-ram-fraction"}, "F",
++        string_format("derived dense budget as a share of available RAM (default: %.2f)",
++            params.guanaco_auto_ram_fraction),
++        [](common_params & params, const std::string & value) {
++            const float f = std::stof(value);
++            if (f > 0.0f && f <= 1.0f) {
++                params.guanaco_auto_ram_fraction = f;
++            }
++        }
++    ).set_env("LLAMA_ARG_GUANACO_AUTO_RAM_FRACTION"));
      add_opt(common_arg(
          {"-lm", "--load-mode"}, "MODE",
          "model loading mode (default: auto)\n"
-@@ -2698,7 +2778,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2698,7 +2817,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
          "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
          "- mlock: force system to keep model in RAM rather than swapping or compressing\n"
          "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
@@ -121,7 +167,7 @@ index 7c1b81e0f..050957ff7 100644
          [](common_params & params, const std::string & value) {
              /**/ if (value == "auto")       { params.load_mode = LLAMA_LOAD_MODE_AUTO;       }
              else if (value == "none")       { params.load_mode = LLAMA_LOAD_MODE_NONE;       }
-@@ -2706,6 +2788,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2706,6 +2827,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              else if (value == "mlock")      { params.load_mode = LLAMA_LOAD_MODE_MLOCK;      }
              else if (value == "mmap+mlock") { params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK; }
              else if (value == "dio")        { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;  }

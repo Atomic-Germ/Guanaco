@@ -105,6 +105,12 @@ struct GUANACO_API SteppeLoaderConfig {
     // Read dense tensors into private anonymous slabs (DONTNEED actually frees
     // them). When false, fall back to in-place madvise on the shared mmap.
     bool   dense_use_slab = true;
+    // When true and dense_budget_bytes is 0, derive the budget from available
+    // RAM - but only for a model with no expert tensors. On a hybrid model the
+    // budget is split in half to give the experts a ceiling, and that ceiling
+    // evicts pinned experts, so it must never be set behind the user's back.
+    bool   dense_budget_auto  = true;
+    double dense_budget_ram_fraction = 0.70;
 };
 
 // One whole dense weight tensor registered for layer-window streaming. Unlike
@@ -167,6 +173,11 @@ public:
     // Called once after all dense tensors are registered so the first token
     // finds its weights resident.
     void fill_resident_layers();
+
+    // Derives dense_budget_bytes from available RAM when the user set none.
+    // Called at the top of fill_resident_layers(), which is the first point
+    // where stream_total_bytes_ is final. No-op for MoE or hybrid models.
+    void resolve_dense_budget_auto();
     // Allocate private slabs for the layer-window tensors. Called from
     // fill_resident_layers() once the model size is known, so the
     // model-over-budget decision can be made before any slab exists.

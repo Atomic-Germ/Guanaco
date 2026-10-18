@@ -1,5 +1,5 @@
 diff --git a/src/llama.cpp b/src/llama.cpp
-index 9beb14841..6236e6a0b 100644
+index 9beb14841..80b242bf8 100644
 --- a/src/llama.cpp
 +++ b/src/llama.cpp
 @@ -11,6 +11,11 @@
@@ -31,7 +31,7 @@ index 9beb14841..6236e6a0b 100644
      GGML_ABORT("unknown load mode: %s", str);
  }
  
-@@ -366,10 +374,36 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
+@@ -366,10 +374,38 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
              return {0, model_ptr.release()};
          }
  
@@ -46,6 +46,8 @@ index 9beb14841..6236e6a0b 100644
 +            cfg.dense_streaming     = params.guanaco_dense_budget_mb > 0;
 +            cfg.dense_budget_bytes  = (size_t) params.guanaco_dense_budget_mb * 1024 * 1024;
 +            cfg.dense_prefetch_ahead = params.guanaco_dense_ahead;
++            cfg.dense_budget_auto      = params.guanaco_dense_budget_auto;
++            cfg.dense_budget_ram_fraction = params.guanaco_auto_ram_fraction;
 +            model->guanaco_hook = guanaco::create_guanaco_model_hook(fname.c_str(), cfg);
 +            if (model->guanaco_hook != nullptr) {
 +                static_cast<guanaco::GuanacoModelHook *>(model->guanaco_hook)->initialize(&ml, model);
@@ -68,7 +70,7 @@ index 9beb14841..6236e6a0b 100644
          return {0, model_ptr.release()};
      } catch (const std::exception & err) {
          LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
-@@ -619,3 +653,14 @@ const char * llama_print_system_info(void) {
+@@ -619,3 +655,14 @@ const char * llama_print_system_info(void) {
      return s.c_str();
  }
  
