@@ -1,0 +1,23 @@
+=== 1/4 endpoints ===
+  :8081 200
+  :8082 200
+
+=== 2/4 both answer, same prompt ===
+small     5.8s  ERROR: string indices must be integers, not 'str'
+large    35.1s  ERROR: string indices must be integers, not 'str'
+
+=== 3/4 small model rate with the large one resident ===
+  round 1: 1792363821.283326401 s total
+  round 2: 1792363821.301592620 s total
+  round 3: 1792363821.318687071 s total
+
+=== 4/4 switch back and forth ===
+small     0.0s  ERROR: Expecting value: line 1 column 1 (char 0)
+large    19.1s  ERROR: string indices must be integers, not 'str'
+small     0.0s  ERROR: Expecting value: line 1 column 1 (char 0)
+
+=== pager / memory state ===
+[Guanaco Pager] resident subset: 23/64 layers guaranteed (7000 MB budget; a floor - the kernel caches more when RAM allows)
+               total        used        free      shared  buff/cache   available
+Mem:              46           5          16           0          25          41
+FUNCTIONAL TEST DONE

@@ -1,0 +1,1 @@
+/home/atomic-germ/.cache/huggingface/hub/models--mradermacher--Huihui-MoE-24B-A8B-abliterated-i1-GGUF/snapshots/c3828abd11c1aa75aa6d7c6131b0f3a54aff2492/Huihui-MoE-24B-A8B-abliterated.i1-Q6_K.gguf

@@ -1,0 +1,21 @@
+########## cold start: 27B, cache dropped, 16G cap, run 1 ##########
+  Cached: 21506104 kB -> 710952 kB (dropped 20795152 kB)
+/-\[Guanaco Pager] resident subset: 23/64 layers guaranteed (7000 MB budget; a floor - the kernel caches more when RAM allows)
+[ Prompt: 5.6 t/s | Generation: 0.1 t/s ]
+  wall for 4 tokens: 67.071133992 s
+########## cold start: 27B, cache dropped, 16G cap, run 2 ##########
+  Cached: 16792980 kB -> 716940 kB (dropped 16076040 kB)
+/-[Guanaco Pager] resident subset: 23/64 layers guaranteed (7000 MB budget; a floor - the kernel caches more when RAM allows)
+[ Prompt: 5.6 t/s | Generation: 0.3 t/s ]
+  wall for 4 tokens: 37.458690412 s
+########## cold start: 27B, cache dropped, 30G cap, run 1 ##########
+  Cached: 16791848 kB -> 712692 kB (dropped 16079156 kB)
+/-\[Guanaco Pager] resident subset: 23/64 layers guaranteed (7000 MB budget; a floor - the kernel caches more when RAM allows)
+[ Prompt: 10.5 t/s | Generation: 1.3 t/s ]
+  wall for 4 tokens: 20.542631791 s
+########## cold start: 27B, cache dropped, 30G cap, run 2 ##########
+  Cached: 21444068 kB -> 712944 kB (dropped 20731124 kB)
+/-\[Guanaco Pager] resident subset: 23/64 layers guaranteed (7000 MB budget; a floor - the kernel caches more when RAM allows)
+[ Prompt: 10.4 t/s | Generation: 1.3 t/s ]
+  wall for 4 tokens: 20.632401808 s
+COLD START DONE

@@ -1,0 +1,48 @@
+warn: LLAMA_ARG_THREADS environment variable is set, but will be overwritten by command line argument -t
+0.00.024.500 I srv  llama_server: initializing ...
+0.00.024.516 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.024.779 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)
+0.00.026.170 I srv    load_model: loading model '/home/atomic-germ/.cache/huggingface/hub/models--mradermacher--Qwen3.8-27B-antislop-i1-GGUF/snapshots/81d66f4d43af643404462d14819e1290e0a3f0ec/Qwen3.8-27B-antislop.i1-Q6_K.gguf'
+0.00.026.184 W common_model_params_to_llama: forcing n_gpu_layers=0 (gpu-pill/streaming keep weights in CPU memory)
+[Guanaco Storage] io_uring ring created (queue=256, reap_timeout=0ms)
+[Guanaco HerdCache] pin budget (max_active_experts) = 8 experts per tensor
+[Guanaco Storage] Model config: qwen35, experts=0, top_k=0, layers=64, hidden=5120
+[Guanaco Storage] layer-window streaming requested (budget=7000 MB, prefetch ahead=3 layers); mechanism decided after load
+0.01.321.537 E gguf_init_from_reader: failed to read key-value pairs
+0.01.324.283 E read: string length 24 exceeds remaining file size 20 bytes
+0.01.324.827 E gguf_init_from_reader: failed to read key-value pairs
+0.01.329.916 E read: string length 46 exceeds remaining file size 7 bytes
+0.01.330.804 E gguf_init_from_reader: failed to read key-value pairs
+0.01.343.816 E read: string length 19 exceeds remaining file size 16 bytes
+0.01.344.541 E gguf_init_from_reader: failed to read key-value pairs
+[Guanaco Storage] Parsed 851 weight tensors across 64 layers (from 1 shard(s))
+[Guanaco Storage] Model exceeds budget (19057 MB > 7000 MB): paging the file mmap
+[Guanaco Storage] directly, not private slabs (anonymous pages are unreclaimable).
+[Guanaco Pager] resident subset: 23/64 layers guaranteed (7000 MB budget; a floor - the kernel caches more when RAM allows)
+0.01.717.275 I cmn          init: llama threadpool init, n_threads = 4
+0.04.499.527 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 2048, kv_unified = 'true'
+0.04.503.260 W srv          init: chat template supports preserving reasoning, it is enabled by default (may use more tokens, disable via --no-reasoning-preserve)
+0.04.503.309 I srv  llama_server: model loaded
+0.04.503.315 I srv  llama_server: listening on http://127.0.0.1:8082
+0.20.026.783 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+0.20.026.842 I slot launch_slot_: id  3 | task 0 | processing task, is_child = 0
+0.23.567.323 I slot print_timing: id  3 | task 0 | prompt processing, n_tokens =     11, progress = 0.73, t =   3.54 s / 3.11 tokens per second
+1.10.306.005 I slot print_timing: id  3 | task 0 | prompt eval time =    6142.33 ms /    15 tokens (  409.49 ms per token,     2.44 tokens per second)
+1.10.306.008 I slot print_timing: id  3 | task 0 |        eval time =   44136.78 ms /    60 tokens (  748.08 ms per token,     1.34 tokens per second)
+1.10.306.009 I slot print_timing: id  3 | task 0 |       total time =   50279.11 ms /    75 tokens
+1.10.306.013 I slot print_timing: id  3 | task 0 |    graphs reused =         58
+1.10.306.036 I slot      release: id  3 | task 0 | stop processing: n_tokens = 74, truncated = 0
+2.12.398.413 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+2.12.398.462 I slot launch_slot_: id  2 | task 62 | processing task, is_child = 0
+2.39.387.267 I slot print_timing: id  2 | task 62 | prompt eval time =    5061.20 ms /     7 tokens (  723.03 ms per token,     1.38 tokens per second)
+2.39.387.271 I slot print_timing: id  2 | task 62 |        eval time =   21860.75 ms /    30 tokens (  753.82 ms per token,     1.33 tokens per second)
+2.39.387.272 I slot print_timing: id  2 | task 62 |       total time =   26921.95 ms /    37 tokens
+2.39.387.273 I slot print_timing: id  2 | task 62 |    graphs reused =         86
+2.39.387.287 I slot      release: id  2 | task 62 | stop processing: n_tokens = 36, truncated = 0
+3.09.156.588 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = -1
+3.09.156.634 I slot launch_slot_: id  1 | task 94 | processing task, is_child = 0
+3.43.284.861 I slot print_timing: id  1 | task 94 | prompt eval time =    5538.08 ms /    10 tokens (  553.81 ms per token,     1.81 tokens per second)
+3.43.284.867 I slot print_timing: id  1 | task 94 |        eval time =   28522.07 ms /    37 tokens (  792.28 ms per token,     1.26 tokens per second)
+3.43.284.868 I slot print_timing: id  1 | task 94 |       total time =   34060.15 ms /    47 tokens
+3.43.284.869 I slot print_timing: id  1 | task 94 |    graphs reused =        121
+3.43.284.888 I slot      release: id  1 | task 94 | stop processing: n_tokens = 46, truncated = 0

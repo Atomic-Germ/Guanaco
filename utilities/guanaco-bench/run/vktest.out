@@ -1,0 +1,13 @@
+=== gpu-pill, prompt cache ON (known crash) ===
+  health: 200
+  req 1: 7.94 tok/s
+  req 2: FAILED: Remote end closed connection without response
+  server: DEAD
+vktest.sh: line 53: 25717 Segmentation fault         (core dumped) setsid env -u LLAMA_ARG_LOAD_MODE -u LLAMA_ARG_GPU_PILL "$BIN/llama-server" -m "$SMALL" --port 8081 -c 4096 -t 6 --no-warmup "$@" > "$B/run/case.log" 2>&1 < /dev/null
+=== gpu-pill, --no-cache-prompt ===
+  health: 200
+  req 1: 7.91 tok/s
+  req 2: FAILED: Remote end closed connection without response
+  server: DEAD
+vktest.sh: line 54: 25762 Segmentation fault         (core dumped) setsid env -u LLAMA_ARG_LOAD_MODE -u LLAMA_ARG_GPU_PILL "$BIN/llama-server" -m "$SMALL" --port 8081 -c 4096 -t 6 --no-warmup "$@" > "$B/run/case.log" 2>&1 < /dev/null
+VULKAN CASES DONE

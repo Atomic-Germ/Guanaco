@@ -1,0 +1,1 @@
+/home/atomic-germ/.cache/huggingface/hub/models--mradermacher--Qwen3.8-27B-antislop-i1-GGUF/snapshots/81d66f4d43af643404462d14819e1290e0a3f0ec/Qwen3.8-27B-antislop.i1-Q6_K.gguf

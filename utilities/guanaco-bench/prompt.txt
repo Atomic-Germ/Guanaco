@@ -1,0 +1,4 @@
+Explain how a consensus protocol lets distributed nodes agree on a value despite
+failures. Cover quorums, ballot numbers, leader election, log replication, and
+why safety holds when messages are delayed, duplicated, or lost. Explain the
+failure modes and how each mechanism prevents them.

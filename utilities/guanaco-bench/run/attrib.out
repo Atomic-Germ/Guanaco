@@ -1,0 +1,16 @@
+=== gpu-pill OFF, full offload (gpu_pill=0, ngl=99) ===
+  req 1: 7.59 tok/s
+  req 2: FAILED: Remote end closed connection without response
+  server: DEAD (crashed)
+attrib.sh: line 61: 26047 Segmentation fault         (core dumped) setsid env LLAMA_ARG_GPU_PILL="$pill" "$BIN/llama-server" -m "$SMALL" --port 8081 -ngl "$ngl" -c 4096 -t 6 --no-warmup > "$B/run/case.log" 2>&1 < /dev/null
+=== gpu-pill OFF, no offload (gpu_pill=0, ngl=0) ===
+  req 1: 6.38 tok/s
+  req 2: 6.38 tok/s
+  req 3: 6.33 tok/s
+  server: alive
+=== gpu-pill ON (UMA) (gpu_pill=1, ngl=99) ===
+  req 1: 7.62 tok/s
+  req 2: FAILED: Remote end closed connection without response
+  server: DEAD (crashed)
+attrib.sh: line 63: 26132 Segmentation fault         (core dumped) setsid env LLAMA_ARG_GPU_PILL="$pill" "$BIN/llama-server" -m "$SMALL" --port 8081 -ngl "$ngl" -c 4096 -t 6 --no-warmup > "$B/run/case.log" 2>&1 < /dev/null
+ATTRIBUTION DONE

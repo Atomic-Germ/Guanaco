@@ -1,0 +1,20 @@
+warn: LLAMA_ARG_THREADS environment variable is set, but will be overwritten by command line argument -t
+0.00.026.000 I common_params_guanaco_resolve_defaults: model is 5.2 GB and 49.8 GB of RAM is usable at 80%; using plain mmap (pass --load-mode streaming to override)
+0.00.026.043 I srv  llama_server: initializing ...
+0.00.026.053 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.026.380 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)
+0.00.027.881 I srv    load_model: loading model '/home/atomic-germ/.cache/huggingface/hub/models--bartowski--AesCode-8B-GGUF/blobs/dda496dc12784f5b5297d56d6ab0d7b5ccd4dd53018257f59732c18525f81490'
+0.00.268.492 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.00.970.067 I cmn          init: llama threadpool init, n_threads = 6
+0.01.149.596 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 4096, kv_unified = 'true'
+0.01.152.459 I srv  llama_server: model loaded
+0.01.152.464 I srv  llama_server: listening on http://127.0.0.1:8081
+0.25.002.628 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+0.25.002.666 I slot launch_slot_: id  3 | task 0 | processing task, is_child = 0
+0.29.115.338 I slot print_timing: id  3 | task 0 | prompt eval time =     141.31 ms /     1 tokens (  141.31 ms per token,     7.08 tokens per second)
+0.29.115.346 I slot print_timing: id  3 | task 0 |        eval time =    3971.32 ms /    30 tokens (  136.94 ms per token,     7.30 tokens per second)
+0.29.115.347 I slot print_timing: id  3 | task 0 |       total time =    4112.62 ms /    31 tokens
+0.29.115.353 I slot print_timing: id  3 | task 0 |    graphs reused =         29
+0.29.115.398 I slot      release: id  3 | task 0 | stop processing: n_tokens = 30, truncated = 0
+0.29.122.259 I slot get_availabl: id  3 | task -1 | selected slot by LCP similarity, f_sim_best = 1.000 (> 0.100 thold), f_keep = 0.033
+EXIT=139

@@ -1,0 +1,39 @@
+warn: LLAMA_ARG_THREADS environment variable is set, but will be overwritten by command line argument -t
+0.00.027.634 I common_params_guanaco_resolve_defaults: model is 5.2 GB and 49.8 GB of RAM is usable at 80%; using plain mmap (pass --load-mode streaming to override)
+0.00.027.677 I srv  llama_server: initializing ...
+0.00.027.689 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.028.018 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)
+0.00.029.440 I srv    load_model: loading model '/home/atomic-germ/.cache/huggingface/hub/models--bartowski--AesCode-8B-GGUF/blobs/dda496dc12784f5b5297d56d6ab0d7b5ccd4dd53018257f59732c18525f81490'
+0.00.265.556 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.01.223.547 W resolve_fused_ops: layer 0 is assigned to device CPU but Flash Attention is assigned to device Vulkan0 (usually due to missing support)
+0.01.223.550 W resolve_fused_ops: Flash Attention not supported, set to disabled
+0.01.249.488 I cmn          init: llama threadpool init, n_threads = 6
+0.01.730.585 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 4096, kv_unified = 'true'
+0.01.733.623 I srv  llama_server: model loaded
+0.01.733.628 I srv  llama_server: listening on http://127.0.0.1:8081
+0.25.027.007 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+0.25.027.056 I slot launch_slot_: id  3 | task 0 | processing task, is_child = 0
+0.31.991.431 I slot print_timing: id  3 | task 0 | prompt eval time =     505.81 ms /     7 tokens (   72.26 ms per token,    13.84 tokens per second)
+0.31.991.437 I slot print_timing: id  3 | task 0 |        eval time =    6458.51 ms /    40 tokens (  165.60 ms per token,     6.04 tokens per second)
+0.31.991.438 I slot print_timing: id  3 | task 0 |       total time =    6964.32 ms /    47 tokens
+0.31.991.443 I slot print_timing: id  3 | task 0 |    graphs reused =         38
+0.31.991.473 I slot      release: id  3 | task 0 | stop processing: n_tokens = 46, truncated = 0
+0.32.024.867 I slot get_availabl: id  3 | task -1 | selected slot by LCP similarity, f_sim_best = 1.000 (> 0.100 thold), f_keep = 0.152
+0.32.026.464 I slot launch_slot_: id  3 | task 41 | processing task, is_child = 0
+0.32.026.482 W slot   operator(): id  3 | task 41 | need to evaluate at least 1 token for each active slot (n_past = 7, task.n_tokens() = 7)
+0.32.026.482 W slot   operator(): id  3 | task 41 | n_past was set to 6
+0.38.257.849 I slot print_timing: id  3 | task 41 | prompt eval time =     156.90 ms /     1 tokens (  156.90 ms per token,     6.37 tokens per second)
+0.38.257.854 I slot print_timing: id  3 | task 41 |        eval time =    6074.45 ms /    40 tokens (  155.76 ms per token,     6.42 tokens per second)
+0.38.257.854 I slot print_timing: id  3 | task 41 |       total time =    6231.35 ms /    41 tokens
+0.38.257.856 I slot print_timing: id  3 | task 41 |    graphs reused =         78
+0.38.257.870 I slot      release: id  3 | task 41 | stop processing: n_tokens = 46, truncated = 0
+0.38.295.430 I slot get_availabl: id  3 | task -1 | selected slot by LCP similarity, f_sim_best = 1.000 (> 0.100 thold), f_keep = 0.152
+0.38.297.738 I slot launch_slot_: id  3 | task 82 | processing task, is_child = 0
+0.38.297.760 W slot   operator(): id  3 | task 82 | need to evaluate at least 1 token for each active slot (n_past = 7, task.n_tokens() = 7)
+0.38.297.761 W slot   operator(): id  3 | task 82 | n_past was set to 6
+0.44.577.084 I slot print_timing: id  3 | task 82 | prompt eval time =     156.16 ms /     1 tokens (  156.16 ms per token,     6.40 tokens per second)
+0.44.577.088 I slot print_timing: id  3 | task 82 |        eval time =    6123.14 ms /    40 tokens (  157.00 ms per token,     6.37 tokens per second)
+0.44.577.089 I slot print_timing: id  3 | task 82 |       total time =    6279.30 ms /    41 tokens
+0.44.577.090 I slot print_timing: id  3 | task 82 |    graphs reused =        118
+0.44.577.104 I slot      release: id  3 | task 82 | stop processing: n_tokens = 46, truncated = 0
+0.52.757.024 I srv    operator(): operator(): cleaning up before exit...
