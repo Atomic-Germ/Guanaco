@@ -1,6 +1,7 @@
 #include "guanaco/guanaco.h"
 #include "gguf.h"
 #include "ggml-backend.h"
+#include <cstdio>
 #include <cstring>
 #include <cerrno>
 #include <cstdlib>
@@ -37,7 +38,11 @@ SteppeLoader::SteppeLoader(const SteppeLoaderConfig& config) : config_(config) {
             const char * reap_env = getenv("GUANACO_REAP_MS");
             const int reap_ms = reap_env != nullptr ? atoi(reap_env) : 0;
             io_uring_slab_set_reap_timeout(reap_ms);
-            std::cerr << "[Guanaco Storage] io_uring prefetch enabled (queue="
+            uring_queue_depth_ = config_.io_queue_depth;
+            // Do not claim prefetch is enabled here. The ring only matters on the
+            // private-slab path, and that is not decided until every tensor is
+            // registered. fill_resident_layers() reports whether it is used.
+            std::cerr << "[Guanaco Storage] io_uring ring created (queue="
                       << config_.io_queue_depth << ", reap_timeout=" << reap_ms << "ms)\n";
         } else {
             std::cerr << "[Guanaco Storage] io_uring init failed; falling back to pread\n";
@@ -556,8 +561,10 @@ bool SteppeLoader::parse_gguf_metadata() {
     //   expert paging  - fused ffn_*_exps tensors, paged per expert slice with
     //                    madvise on the file mmap. Granular, but bounds
     //                    residency by expert COUNT, not bytes.
-    //   layer windows  - every other tensor, paged whole-layer into private
-    //                    slabs. Coarse, but bounds residency in BYTES.
+    //   layer windows  - every other tensor, paged whole-layer. Coarse, but bounds
+    //                    residency in BYTES. Backed by private slabs when the
+    //                    model fits the budget, otherwise by the file mmap -
+    //                    chosen later, once the model size is known.
     //
     // The expert path leaves attention, embeddings and shared experts entirely
     // unmanaged, so on its own it cannot honour a RAM target. When a byte
@@ -566,9 +573,9 @@ bool SteppeLoader::parse_gguf_metadata() {
     const bool want_budget = config_.dense_streaming && config_.dense_budget_bytes > 0;
     if (want_budget) {
         dense_enabled_ = true;
-        std::cerr << "[Guanaco Storage] layer-window streaming enabled (budget="
+        std::cerr << "[Guanaco Storage] layer-window streaming requested (budget="
                   << (config_.dense_budget_bytes / (1024 * 1024)) << " MB, prefetch ahead="
-                  << config_.dense_prefetch_ahead << " layers)\n";
+                  << config_.dense_prefetch_ahead << " layers); mechanism decided after load\n";
     }
 
     // NOTE: the private-slab decision is made in fill_resident_layers(), not here.
@@ -839,11 +846,20 @@ void* SteppeLoader::get_stream_tensor_data(const std::string& name) {
     return nullptr;
 }
 
-// pread()/io_uring reads leave a clean copy of the tensor in the page cache.
-// Under a cgroup cap those copies force continuous reclaim (system-time
-// churn), so drop them. Dense tensors no longer fault through the file mmap,
-// so this cannot race with the compute path.
-static void fadvise_drop(int fd, const std::vector<StreamTensor>& tensors) {
+// pread()/io_uring reads into a private slab leave a second, redundant copy of
+// the tensor in the page cache. Under a cgroup cap those copies force continuous
+// reclaim (system-time churn), so drop them.
+//
+// NOT safe when the layer is served through the file mmap instead of a slab:
+// there the page cache copy IS the data llama.cpp is about to read, and
+// POSIX_FADV_DONTNEED on pages under an active mapping turns a cached read into
+// a re-fault. Slab-backed layers never fault through the mmap, so the drop
+// cannot race them. Callers pass dense_use_slab so the distinction is made at
+// the call site rather than assumed here.
+static void fadvise_drop(int fd, const std::vector<StreamTensor>& tensors, bool slab_backed) {
+    if (!slab_backed) {
+        return;
+    }
     for (const auto& t : tensors) {
         if (t.byte_size != 0) {
             posix_fadvise(fd, (off_t)t.file_offset, (off_t)t.byte_size, POSIX_FADV_DONTNEED);
@@ -851,9 +867,14 @@ static void fadvise_drop(int fd, const std::vector<StreamTensor>& tensors) {
     }
 }
 
-// Read a whole layer's tensors into their slabs. Synchronous: the batch is
-// submitted to io_uring (or read with pread when io_uring is unavailable) and
-// reaped before returning, so the caller can rely on the slab being filled.
+// Make a whole layer resident, synchronously. Two mechanisms, chosen by
+// config_.dense_use_slab:
+//
+//   slab  - read every tensor into its private slab via io_uring (or pread).
+//           Synchronous: submitted and reaped before returning.
+//   mmap  - MADV_WILLNEED the layer's file-mmap range. Non-blocking advisory:
+//           the kernel starts readahead and llama.cpp's actual access faults
+//           the rest in. Nothing is copied, so the page cache is the only copy.
 void SteppeLoader::prefetch_layer(int layer) {
     auto it = stream_layers_.find(layer);
     if (it == stream_layers_.end()) return;
@@ -881,7 +902,7 @@ void SteppeLoader::prefetch_layer(int layer) {
         if (!slices.empty() && io_uring_slab_read(uring_slab_, fd_, slices)) {
             ++dense_uring_ops_;
             if (layer < (int)layer_resident_.size()) layer_resident_[layer] = 1;
-            fadvise_drop(fd_, it->second);
+            fadvise_drop(fd_, it->second, config_.dense_use_slab);
             dense_io_bytes_ += want_bytes;
             dense_io_seconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_t0).count();
             return;
@@ -904,7 +925,7 @@ void SteppeLoader::prefetch_layer(int layer) {
             madvise_range(t.mmap_base, t.byte_size, MADV_WILLNEED);
         }
     }
-    fadvise_drop(fd_, it->second);
+    fadvise_drop(fd_, it->second, config_.dense_use_slab);
     if (layer < (int)layer_resident_.size()) layer_resident_[layer] = 1;
     dense_io_bytes_ += want_bytes;
     dense_io_seconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_t0).count();
@@ -1005,7 +1026,7 @@ void SteppeLoader::ensure_layer(int layer) {
         if (all_ok) {
             if (layer < (int)layer_resident_.size()) layer_resident_[layer] = 1;
             auto it = stream_layers_.find(layer);
-            if (it != stream_layers_.end()) fadvise_drop(fd_, it->second);
+            if (it != stream_layers_.end()) fadvise_drop(fd_, it->second, config_.dense_use_slab);
             for (const auto& t : it->second) {
                 if (t.slab != nullptr && t.byte_size != 0) dense_io_bytes_ += t.byte_size;
             }
@@ -1134,9 +1155,16 @@ static const char* dense_evict_name() {
     }
 }
 
-// Drop the layer's slabs. Both advice modes really free anonymous pages (unlike
-// the shared file mmap, where DONTNEED is a no-op). The bytes are whole-tensor
-// copies, so this never touches weights.
+// Release a streamed layer so the footprint stays near `ahead` layers.
+//
+// Slab path: advices the private slabs. Both modes really do drop anonymous
+// pages, though MADV_FREE only reclaims under pressure - see dense_evict_advice.
+//
+// mmap path: advises MADV_DONTNEED on the file-mapped range. The old comment
+// here claimed DONTNEED was a no-op on a shared file mapping, which is what
+// made the MoE path look structurally unenforceable. Probed on kernel 7.2: it
+// drops the pages cleanly (524288 kB -> 0 kB) and re-faults correctly. Verified
+// empirically rather than taken from the comment.
 void SteppeLoader::evict_layer(int layer) {
     auto it = stream_layers_.find(layer);
     if (it == stream_layers_.end()) return;
@@ -1233,8 +1261,15 @@ void SteppeLoader::fill_resident_layers() {
     for (int L = 0; L < w; ++L) {
         prefetch_layer(L);
     }
+    // "resident subset" is the pager's GUARANTEE - the prefix it keeps. It is a
+    // floor, not a cap: the kernel's page cache keeps whatever it wants on top
+    // of it whenever RAM is free, so actual residency can exceed this. Measured
+    // on a 27B at an 8096MB budget: pager guaranteed 36 layers, the kernel
+    // actually cached ~41. Say so, or the number reads like a cap and leads to
+    // wrong arithmetic about what is coming off the NVMe.
     std::cerr << "[Guanaco Pager] resident subset: " << w << "/" << n_layers
-              << " layers (" << (dense_budget_bytes_ / (1024*1024)) << " MB budget)";
+              << " layers guaranteed (" << (dense_budget_bytes_ / (1024*1024)) << " MB budget;"
+              << " a floor - the kernel caches more when RAM allows)";
     if (enabled_ && !expert_tensors_.empty()) {
         // Report the split honestly: the pager bounds the non-expert tensors,
         // and the expert path adds its own residency on top. The two budgets
@@ -1277,9 +1312,10 @@ void SteppeLoader::on_layer_boundary(int layer) {
 
     ++dense_boundaries_;
 
-    // Keep the async pipeline full: queue streamed layers up to `ahead` past
-    // the current one. Each layer is queued once; its read completes while the
-    // layers in between are computed.
+    // Keep the async pipeline full: queue streamed layers up to `ahead` past the
+    // current one, so each read completes while the layers in between compute.
+    // Only meaningful on the slab path; submit_layer_async declines without
+    // slabs, and the mmap path prefetches via MADV_WILLNEED instead.
     const int target = layer + ahead;
     for (int k = submitted_upto_ + 1; k <= target && k < n_layers; ++k) {
         if (k >= w) {
@@ -1289,15 +1325,17 @@ void SteppeLoader::on_layer_boundary(int layer) {
     }
 
     // The next layer is computed as soon as this callback returns, so make it
-    // resident. In steady state its read was queued `ahead` boundaries ago and
-    // this reaps cheaply; only a cold pipeline reads synchronously.
+    // resident. Slab path: its read was queued `ahead` boundaries ago, so this
+    // reaps cheaply. mmap path: nothing is queued, so this advises WILLNEED and
+    // the page-in cost lands on llama.cpp's first read of the layer.
     const int next = layer + 1;
     if (next >= w && next < n_layers) {
         ensure_layer(next);
     }
 
-    // The layer just computed will not be needed again until the next pass;
-    // drop its slabs now to keep the streamed footprint at `ahead` layers.
+    // The layer just computed will not be needed again until the next pass, so
+    // release it now to keep the streamed footprint near `ahead` layers. Slab
+    // path frees its slabs; mmap path drops the file-mmap pages.
     if (layer >= w && layer < n_layers && layer < (int)layer_resident_.size() && layer_resident_[layer]) {
         evict_layer(layer);
     }
@@ -1876,24 +1914,66 @@ void SteppeLoader::log_final_summary() {
         const double now_s = std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         double io_span = dense_io_span_start_ > 0.0 ? now_s - dense_io_span_start_ : 0.0;
-        std::cerr << "[Guanaco Pager] final: dense slab-stream, "
+        // Name the mechanism actually used. On the mmap path none of the slab counters
+        // mean anything: no io_uring, no pread, and zero bytes moved through the
+        // pager because the page-in happens inside llama.cpp's own reads. Saying
+        // "slab-stream" there sent this investigation down the wrong path.
+        const char * mech = config_.dense_use_slab ? "slab-stream" : "mmap-stream";
+        // Measured residency, straight from this process. The kernel's page cache can
+        // hold more than the pager guarantees (or less, under pressure), so the
+        // guarantee line above is intent and this is fact. On the mmap path
+        // RssFile is the weights; on the slab path they are anonymous instead.
+        auto read_rss_kb = [](const char * key) -> size_t {
+            FILE * f = fopen("/proc/self/status", "r");
+            if (f == NULL) return 0;
+            char line[256];
+            size_t val = 0;
+            while (fgets(line, sizeof(line), f)) {
+                if (strncmp(line, key, strlen(key)) == 0) {
+                    sscanf(line + strlen(key), " %zu", &val);
+                    break;
+                }
+            }
+            fclose(f);
+            return val;
+        };
+        const size_t rss_anon_mb = read_rss_kb("RssAnon:") / 1024;
+        const size_t rss_file_mb = read_rss_kb("RssFile:") / 1024;
+        const size_t rss_total_mb = read_rss_kb("VmRSS:")  / 1024;
+
+        std::string io_rate_str;
+        if (config_.dense_use_slab) {
+            char buf[192];
+            snprintf(buf, sizeof(buf),
+                     ", ioMB/s=%ld, depth=%zu/%zu, svc=%ldms",
+                     (long)(io_span > 0.0
+                            ? (double)dense_io_bytes_ / (1024.0 * 1024.0) / io_span : 0.0),
+                     dense_max_inflight_,
+                     dense_inflight_samples_ ? dense_inflight_sum_ / dense_inflight_samples_ : 0,
+                     (long)(dense_inflight_latency_sum_ * 1000.0
+                            / (double)(dense_uring_ops_ ? dense_uring_ops_ : 1)));
+            io_rate_str = buf;
+        } else {
+            io_rate_str = ", ioMB/s=n/a, io counters n/a (mmap path: page-in happens in llama.cpp reads)";
+        }
+        std::cerr << "[Guanaco Pager] final: dense " << mech << ", "
                   << stream_layers_.size() << " layers / " << mib << " MB, "
                   << "resident=" << stream_resident_layers_ << " layers, "
                   << dense_boundaries_ << " boundaries, "
                   << dense_prefetch_ops_ << " prefetches, "
                   << dense_evict_ops_ << " evictions, "
                   << dense_lock_fails_ << " slab-allocs-failed, "
-                  << dense_uring_ops_ << " uring / " << dense_pread_ops_ << " pread, "
-                  << "[" << io_uring_slab_stats_line() << "]"
+                  << dense_uring_ops_ << " uring / " << dense_pread_ops_
+                  << (config_.dense_use_slab ? " pread" : " willneed-hints")
+                  << ", [" << io_uring_slab_stats_line() << "]"
                   << "io=" << (long)dense_io_seconds_ << "s"
                   << ", span=" << (long)(io_span * 1000.0) << "ms"
-                  << ", ioMB/s=" << (long)(io_span > 0.0
-                        ? (double)dense_io_bytes_ / (1024.0 * 1024.0) / io_span
-                        : 0.0)
-                  << ", depth=" << dense_max_inflight_
-                  << "/" << (dense_inflight_samples_ ? dense_inflight_sum_ / dense_inflight_samples_ : 0)
-                  << ", svc=" << (long)(dense_inflight_latency_sum_ * 1000.0 / (double)(dense_uring_ops_ ? dense_uring_ops_ : 1))
-                  << "ms"
+                  << io_rate_str
+                  << ", resident=" << rss_total_mb << "MB rss"
+                  << " (anon=" << rss_anon_mb << "MB, file=" << rss_file_mb << "MB)"
+                  << (config_.dense_use_slab
+                        ? " [slabs are anon]"
+                        : " [weights are file-mapped]")
                   << ", ahead=" << config_.dense_prefetch_ahead
                   << ", evict=" << dense_evict_name()
                   << ", waits=" << dense_wait_ops_

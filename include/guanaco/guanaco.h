@@ -274,6 +274,7 @@ private:
     int    stream_resident_layers_ = 0;     // fixed resident subset size W (layers [0,W))
     long   dense_wait_ops_     = 0;         // ensure_layer calls that had to wait
     int    submitted_upto_     = -1;        // highest streamed layer queued to io_uring
+    unsigned uring_queue_depth_ = 0;      // ring size, for the startup/summary report
     uint64_t madvise_ops_      = 0;         // successful madvise_range calls
     uint64_t madvise_failures_ = 0;         // rejected by the kernel (e.g. EINVAL)
     // Global expert residency, tracked so the expert path can honour a byte
