@@ -287,13 +287,22 @@ if(GUANACO_BUILD_EXAMPLES)
     target_link_libraries(guanaco_example guanaco)
 endif()
 
-# Phase-0 measurement probe for the dense pseudo-expert experiment. Off by
-# default; it only links llama.cpp and does not touch production code.
-option(GUANACO_BUILD_PROBES "Build Phase-0 measurement probes" OFF)
+# Measurement probes for the dense pseudo-expert experiment. Off by default;
+# they only link llama.cpp and do not touch production code.
+option(GUANACO_BUILD_PROBES "Build measurement probes" OFF)
 if(GUANACO_BUILD_PROBES)
     add_executable(tomoe_probe examples/tomoe_probe.cpp)
     target_link_libraries(tomoe_probe PRIVATE llama-common llama Threads::Threads)
     target_compile_features(tomoe_probe PRIVATE cxx_std_17)
+
+    # Gate experiment for dense pseudo-expert slicing: is FFN contribution
+    # sparse, and is the sparse set domain-specific? Scores
+    # c_i = |act_i| * ||W_down[i,:]||_2 per token per layer and compares the
+    # dynamic (per-token) bound, the static (global) bound, and map transfer
+    # between domains.
+    add_executable(dendrite_probe examples/dendrite_probe.cpp)
+    target_link_libraries(dendrite_probe PRIVATE llama-common llama Threads::Threads)
+    target_compile_features(dendrite_probe PRIVATE cxx_std_17)
 endif()
 
 if(GUANACO_BUILD_TESTS)
