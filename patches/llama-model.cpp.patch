@@ -1,5 +1,5 @@
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index b3a0cf5d5..d16f21752 100644
+index b3a0cf5d5..2a1f0e3f6 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1,5 +1,9 @@
@@ -339,7 +339,7 @@ index b3a0cf5d5..d16f21752 100644
                                  filter,
                                  nullptr,
                                  nullptr);
-@@ -2972,6 +3122,15 @@ llama_model_params llama_model_default_params() {
+@@ -2972,6 +3122,17 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -350,12 +350,14 @@ index b3a0cf5d5..d16f21752 100644
 +        /*.guanaco_pilot_mass          =*/ 0.9f,
 +        /*.guanaco_imatrix             =*/ true,
 +        /*.guanaco_dense_budget_mb     =*/ 0,
++        /*.guanaco_dense_budget_auto   =*/ true,
++        /*.guanaco_auto_ram_fraction   =*/ 0.70,
 +        /*.guanaco_dense_ahead         =*/ 3,
 +#endif
          /*.load_mtp                    =*/ false,
      };
  
-@@ -3422,6 +3581,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
+@@ -3422,6 +3583,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
      TENSOR_ALLOW_RESHAPE  (llama_model_loader::TENSOR_ALLOW_RESHAPE),
      TENSOR_READ_LAZY      (llama_model_loader::TENSOR_READ_LAZY) {}
  

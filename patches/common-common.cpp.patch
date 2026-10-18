@@ -1,8 +1,241 @@
 diff --git a/common/common.cpp b/common/common.cpp
-index 9a71a33ff..170e71bff 100644
+index 9a71a33ff..82b24f386 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -1672,6 +1672,16 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
+@@ -17,6 +17,8 @@
+ #include <algorithm>
+ #include <cinttypes>
+ #include <climits>
++#include <cstdio>
++#include <cstdlib>
+ #include <cmath>
+ #include <chrono>
+ #include <cstdarg>
+@@ -230,6 +232,223 @@ int32_t common_cpu_get_num_math() {
+     return common_cpu_get_num_physical_cores();
+ }
+ 
++/**
++ * Total installed RAM, or 0 if it cannot be determined.
++ *
++ * The "does this model fit" decision uses this rather than MemAvailable, which
++ * moves by tens of GB depending on whether the model file happens to be in page
++ * cache: the same 22 GB model measured 41 GB available cached and 47 GB
++ * uncached on this machine. A threshold compared against a moving number makes
++ * one command behave differently on consecutive runs, and "80% of your RAM" is
++ * something a user can reason about. MemAvailable remains the right basis for
++ * the budget, which has to reflect what is free right now.
++ */
++static size_t common_get_cgroup_memory_limit();
++
++/**
++ * Total usable RAM, or 0 if it cannot be determined.
++ *
++ * The "does this model fit" decision uses this rather than MemAvailable, which
++ * moves by tens of GB depending on whether the model file happens to be in page
++ * cache: the same 22 GB model measured 41 GB available cached and 47 GB
++ * uncached on this machine. A threshold compared against a moving number makes
++ * one command behave differently on consecutive runs, and "80% of your RAM" is
++ * something a user can reason about.
++ *
++ * Clamped by any cgroup limit. Without a clamp this reports the host's RAM from
++ * inside a container that has a fraction of it, and concludes the model fits
++ * when it cannot.
++ */
++size_t common_get_total_ram() {
++#if defined(__linux__)
++    FILE * f = fopen("/proc/meminfo", "r");
++    if (f == nullptr) {
++        return 0;
++    }
++    char line[256];
++    size_t kb = 0;
++    while (fgets(line, sizeof(line), f)) {
++        if (strncmp(line, "MemTotal:", 9) == 0) {
++            kb = (size_t) strtoull(line + 9, nullptr, 10);
++            break;
++        }
++    }
++    fclose(f);
++    const size_t total = kb * 1024;
++    const size_t limit = common_get_cgroup_memory_limit();
++    return (limit != 0 && limit < total) ? limit : total;
++#elif defined(__APPLE__)
++    uint64_t mem = 0;
++    size_t len = sizeof(mem);
++    int mib[2] = { CTL_HW, HW_MEMSIZE };
++    return sysctl(mib, 2, &mem, &len, nullptr, 0) == 0 ? (size_t) mem : 0;
++#else
++    return 0;
++#endif
++}
++
++/**
++ * RAM this process is actually allowed to use, or 0 if unlimited/unknown.
++ *
++ * Reads the cgroup v2 memory.max, falling back to v1. This matters because
++ * MemAvailable is system-wide: inside a 12 GB container on a 64 GB host it
++ * still reports most of the host, and a budget derived from it would be several
++ * times larger than the process can ever get. systemd units, containers and CI
++ * all impose such limits, and the failure mode is an immediate OOM rather than
++ * a slowdown.
++ */
++static size_t common_get_cgroup_memory_limit() {
++#if defined(__linux__)
++    // v2: the limit lives in this process's own cgroup, whose path /proc/self/cgroup
++    // reports as "0::/some/path".
++    {
++        FILE * f = fopen("/proc/self/cgroup", "r");
++        if (f != nullptr) {
++            char line[512];
++            char path[512] = {0};
++            while (fgets(line, sizeof(line), f)) {
++                if (strncmp(line, "0::", 3) == 0) {
++                    snprintf(path, sizeof(path), "/sys/fs/cgroup%s", line + 3);
++                    path[strcspn(path, "\n")] = '\0';
++                    break;
++                }
++            }
++            fclose(f);
++            if (path[0] != '\0') {
++                char file[640];
++                snprintf(file, sizeof(file), "%s/memory.max", path);
++                f = fopen(file, "r");
++                if (f != nullptr) {
++                    char v[64] = {0};
++                    const bool ok = fgets(v, sizeof(v), f) != nullptr;
++                    fclose(f);
++                    if (ok && strncmp(v, "max", 3) != 0) {
++                        return (size_t) strtoull(v, nullptr, 10);
++                    }
++                }
++            }
++        }
++    }
++    // v1
++    {
++        FILE * f = fopen("/sys/fs/cgroup/memory/memory.limit_in_bytes", "r");
++        if (f != nullptr) {
++            char v[64] = {0};
++            const bool ok = fgets(v, sizeof(v), f) != nullptr;
++            fclose(f);
++            if (ok) {
++                const size_t lim = (size_t) strtoull(v, nullptr, 10);
++                // v1 reports a huge sentinel when unlimited.
++                if (lim > 0 && lim < ((size_t) 1 << 60)) {
++                    return lim;
++                }
++            }
++        }
++    }
++#endif
++    return 0;
++}
++
++/**
++ * Returns RAM the kernel believes is available for new allocations, or 0 if it
++ * cannot be determined.
++ *
++ * MemAvailable, not MemFree: the resident file cache Guanaco pages weights
++ * through already counts as used, so MemFree would understate the budget after
++ * the first run and shrink it on the next.
++ */
++size_t common_get_available_ram() {
++#if defined(__linux__)
++    FILE * f = fopen("/proc/meminfo", "r");
++    if (f == nullptr) {
++        return 0;
++    }
++    char line[256];
++    size_t kb = 0;
++    while (fgets(line, sizeof(line), f)) {
++        if (strncmp(line, "MemAvailable:", 13) == 0) {
++            kb = (size_t) strtoull(line + 13, nullptr, 10);
++            break;
++        }
++    }
++    fclose(f);
++    const size_t avail = kb * 1024;
++    const size_t limit = common_get_cgroup_memory_limit();
++    return (limit != 0 && limit < avail) ? limit : avail;
++#elif defined(__APPLE__)
++    uint64_t mem = 0;
++    size_t len = sizeof(mem);
++    int mib[2] = { CTL_HW, HW_MEMSIZE };
++    if (sysctl(mib, 2, &mem, &len, nullptr, 0) == 0) {
++        // macOS never reports free memory; assume the wired/VM overhead a
++        // desktop leaves behind.
++        return (size_t) (mem / 3);
++    }
++    return 0;
++#else
++    return 0;
++#endif
++}
++
++#ifdef __APPLE__
++#include <sys/sysctl.h>
++#else
++#include <sys/stat.h>
++#endif
++
++#ifdef GUANACO_ENABLED
++/**
++ * Engage Guanaco streaming by default when the model does not fit in RAM.
++ *
++ * --load-mode AUTO used to resolve straight to mmap, and --guanaco-dense-budget-mb
++ * defaulted to 0, which disables dense paging. A user with a 27B dense and 16 GB
++ * of RAM therefore got neither streaming nor a layer window unless they already
++ * knew to set two environment variables, and the project was invisible by default.
++ *
++ * Only the load mode is decided here. The dense budget depends on whether the
++ * model is actually dense, which is not knowable until the manifest is parsed,
++ * so the loader resolves that itself.
++ *
++ * Returns true if anything changed.
++ */
++bool common_params_guanaco_resolve_defaults(common_params & params) {
++    if (!params.guanaco_auto || params.load_mode != LLAMA_LOAD_MODE_AUTO) {
++        return false;
++    }
++    const size_t ram = common_get_total_ram();
++    if (ram == 0) {
++        return false;
++    }
++
++    // A local file we can stat is the model. An HF repo id resolves later and
++    // keeps the plain mmap default.
++    size_t model_bytes = 0;
++    if (!params.model.path.empty()) {
++        struct stat st;
++        if (stat(params.model.path.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
++            model_bytes = (size_t) st.st_size;
++        }
++    }
++    if (model_bytes == 0) {
++        return false;
++    }
++
++    const size_t ceiling = (size_t) (ram * params.guanaco_auto_load_fraction);
++    if (model_bytes <= ceiling) {
++        LOG_INF("%s: model is %.1f GB and %.1f GB of RAM is usable at %.0f%%; using plain mmap "
++                "(pass --load-mode streaming to override)\n", __func__,
++                model_bytes / 1e9, ram / 1e9, 100.0 * params.guanaco_auto_load_fraction);
++        return false;
++    }
++
++    params.load_mode = LLAMA_LOAD_MODE_STREAMING;
++    LOG_WRN("%s: model is %.1f GB but only %.1f GB of RAM is usable at %.0f%%; "
++            "enabling Guanaco streaming (--guanaco-auto 0 to disable)\n", __func__,
++            model_bytes / 1e9, ram / 1e9, 100.0 * params.guanaco_auto_load_fraction);
++    return true;
++}
++#endif // GUANACO_ENABLED
++
+ // Helper for setting process priority
+ 
+ #if defined(_WIN32)
+@@ -1672,6 +1891,16 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
          mparams.devices = params.devices.data();
      }
  
@@ -19,7 +252,7 @@ index 9a71a33ff..170e71bff 100644
      mparams.n_gpu_layers    = params.n_gpu_layers;
      mparams.main_gpu        = params.main_gpu;
      mparams.split_mode      = params.split_mode;
-@@ -1679,6 +1689,15 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
+@@ -1679,6 +1908,17 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
      mparams.lazy_mode = params.lazy_mode;
      mparams.tensor_split    = params.tensor_split;
      mparams.check_tensors   = params.check_tensors;
@@ -31,11 +264,13 @@ index 9a71a33ff..170e71bff 100644
 +    mparams.guanaco_imatrix       = params.guanaco_imatrix;
 +    mparams.guanaco_dense_budget_mb = params.guanaco_dense_budget_mb;
 +    mparams.guanaco_dense_ahead     = params.guanaco_dense_ahead;
++    mparams.guanaco_dense_budget_auto = params.guanaco_dense_budget_auto;
++    mparams.guanaco_auto_ram_fraction = params.guanaco_auto_ram_fraction;
 +#endif
      mparams.use_extra_bufts = !params.no_extra_bufts;
      mparams.no_host         = params.no_host;
  
-@@ -1736,6 +1755,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
+@@ -1736,6 +1976,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
      cparams.op_offload        = !params.no_op_offload;
      cparams.swa_full          = params.swa_full;
      cparams.kv_unified        = params.kv_unified;
