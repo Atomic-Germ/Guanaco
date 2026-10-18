@@ -1,5 +1,5 @@
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
-index f4eb181a7..6e36a6447 100644
+index f4eb181a7..a249587a9 100644
 --- a/src/llama-cparams.h
 +++ b/src/llama-cparams.h
 @@ -52,6 +52,7 @@ struct llama_cparams {
@@ -10,3 +10,13 @@ index f4eb181a7..6e36a6447 100644
      bool pipeline_parallel;
      bool training;           // set by llama_opt_init()
  
+@@ -66,5 +67,9 @@ struct llama_cparams {
+     ggml_backend_sched_eval_callback cb_eval;
+     void * cb_eval_user_data;
+ 
++    // owned by llama_context, set when Guanaco chains cb_eval. Freed in
++    // ~llama_context.
++    void * guanaco_cb_state;
++
+     llama_context * ctx_other;
+ };

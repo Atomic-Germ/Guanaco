@@ -1,5 +1,5 @@
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 7e6974431..37de24c87 100644
+index 7e6974431..188708bd1 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -1,5 +1,6 @@
@@ -9,13 +9,12 @@ index 7e6974431..37de24c87 100644
  #include "ggml.h"
  #include "llama-arch.h"
  #include "llama-graph.h"
-@@ -14,8 +15,13 @@
+@@ -14,14 +15,85 @@
  #include "llama-sampler.h"
  #include "llama.h"
  
 +#ifdef GUANACO_ENABLED
 +#include "guanaco/guanaco_model_hook.h"
-+#endif
 +
  #include <cinttypes>
  #include <cmath>
@@ -23,7 +22,80 @@ index 7e6974431..37de24c87 100644
  #include <cstring>
  #include <limits>
  #include <stdexcept>
-@@ -34,6 +40,26 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
+ #include <string>
+ #include <unordered_map>
+ 
++// state behind the chained cb_eval installed in llama_context's constructor.
++// Owned by llama_context, freed in ~llama_context after the scheduler is idle.
++struct guanaco_chained_cb {
++    ggml_backend_sched_eval_callback  user;
++    void *                            user_data;
++    guanaco::GuanacoModelHook *       hook;
++};
++
++// Router Prefetch: every time the MoE gating node (ffn_moe_topk-<il>) is
++// computed, read the selected expert ids and pread only those expert slices
++// from the GGUF into their slabs before mul_mat_id runs. Also marks layer
++// boundaries for the dense pager via "l_out-<il>".
++static bool guanaco_eval_callback(
++        struct ggml_tensor * t,
++        bool                 ask,
++        void *               user_data) {
++    if (ask || t == nullptr) {
++        return true; // called before compute; nothing to do
++    }
++    auto * hook = static_cast<guanaco::GuanacoModelHook *>(user_data);
++    if (hook == nullptr) {
++        return true;
++    }
++    const char * name = ggml_get_name(t);
++    if (name == nullptr) {
++        return true;
++    }
++    // Dense layer-window streaming: "l_out-<il>" is emitted once per
++    // transformer layer, so it marks the layer boundary for the pager.
++    if (strncmp(name, "l_out-", 6) == 0) {
++        hook->on_layer_boundary(atoi(name + 6));
++        return true;
++    }
++    if (strncmp(name, "ffn_moe_topk", 12) != 0) {
++        return true;
++    }
++    // runtime name is "ffn_moe_topk-<il>" (layer suffix)
++    int layer = -1;
++    const char * dash = strrchr(name, '-');
++    if (dash != nullptr) {
++        layer = atoi(dash + 1);
++    }
++    const int n = (int)(t->ne[0] * t->ne[1]); // n_expert_used * n_tokens
++    if (n <= 0 || t->buffer == nullptr) {
++        return true;
++    }
++    // the router node can run on a device backend (op_offload), where
++    // t->data is not host-readable, so read the ids through the backend
++    std::vector<int> router_ids(n);
++    ggml_backend_tensor_get(t, router_ids.data(), 0, n * sizeof(int));
++    hook->on_router_computed(layer, router_ids.data(), n);
++    return true;
++}
++
++static bool guanaco_chained_eval_callback(
++        struct ggml_tensor * t,
++        bool                 ask,
++        void *               user_data) {
++    auto * chain = static_cast<guanaco_chained_cb *>(user_data);
++    guanaco_eval_callback(t, ask, chain->hook);
++    if (chain->user != nullptr && t != nullptr) {
++        return chain->user(t, ask, chain->user_data);
++    }
++    return true;
++}
++#endif
++
+ //
+ // llama_context
+ //
+@@ -34,6 +106,26 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
      throw std::runtime_error("Unsupported ctx type");
  }
  
@@ -50,7 +122,34 @@ index 7e6974431..37de24c87 100644
  struct llm_fused_op_probe {
      llm_fused_op op;
      const char * name;
-@@ -277,6 +303,43 @@ llama_context::llama_context(
+@@ -143,6 +235,26 @@ llama_context::llama_context(
+ 
+     cparams.cb_eval           = params.cb_eval;
+     cparams.cb_eval_user_data = params.cb_eval_user_data;
++    cparams.guanaco_cb_state  = nullptr;
++
++#ifdef GUANACO_ENABLED
++    // Chain Guanaco's streaming hook with the caller's callback. Replacing it
++    // disabled every user callback under streaming, including common/debug.cpp
++    // and third-party probes. Guanaco runs first so the pager sees the tensor
++    // before the caller can mutate it.
++    auto * hook = static_cast<guanaco::GuanacoModelHook *>(
++            static_cast<const llama_model_base *>(&model)->guanaco_hook);
++    if (hook != nullptr) {
++        auto * chain = new guanaco_chained_cb {
++            params.cb_eval,
++            params.cb_eval_user_data,
++            hook,
++        };
++        cparams.cb_eval           = guanaco_chained_eval_callback;
++        cparams.cb_eval_user_data = chain;
++        cparams.guanaco_cb_state  = chain;
++    }
++#endif
+ 
+     cparams.ctx_other = nullptr;
+ 
+@@ -277,6 +389,43 @@ llama_context::llama_context(
      cparams.kv_unified     = params.kv_unified;
      cparams.moe_cache_size = params.moe_cache_size;
  
@@ -94,7 +193,7 @@ index 7e6974431..37de24c87 100644
      // initialized later
      cparams.pipeline_parallel = false;
      cparams.training = false;
-@@ -317,6 +380,7 @@ llama_context::llama_context(
+@@ -317,6 +466,7 @@ llama_context::llama_context(
      LLAMA_LOG_INFO("%s: causal_attn           = %d\n",   __func__, cparams.causal_attn);
      LLAMA_LOG_INFO("%s: flash_attn            = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
      LLAMA_LOG_INFO("%s: kv_unified            = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
@@ -102,7 +201,7 @@ index 7e6974431..37de24c87 100644
      LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
      LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
      LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
-@@ -393,6 +457,7 @@ llama_context::llama_context(
+@@ -393,6 +543,7 @@ llama_context::llama_context(
          llama_memory_params params_mem = {
              /*.type_k    =*/ params.type_k,
              /*.type_v    =*/ params.type_v,
@@ -110,7 +209,7 @@ index 7e6974431..37de24c87 100644
              /*.swa_full  =*/ params.swa_full,
              /*.ctx_type  =*/ cparams.ctx_type,
              /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
-@@ -469,6 +534,10 @@ llama_context::llama_context(
+@@ -469,6 +620,10 @@ llama_context::llama_context(
              moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
          }
  
@@ -121,7 +220,19 @@ index 7e6974431..37de24c87 100644
          sched_reserve();
  
          if (!cparams.flash_attn) {
-@@ -3876,6 +3945,7 @@ llama_context_params llama_context_default_params() {
+@@ -493,6 +648,11 @@ llama_context::~llama_context() {
+     // wait for any pending asynchronous copies into the output buffers before they are freed
+     synchronize();
+ 
++    // owned by this context; freed only after the scheduler is idle
++#ifdef GUANACO_ENABLED
++    delete static_cast<guanaco_chained_cb *>(cparams.guanaco_cb_state);
++#endif
++
+     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
+     if (!model.hparams.no_alloc && !opt_ctx) {
+         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+@@ -3876,6 +4036,7 @@ llama_context_params llama_context_default_params() {
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
          /*.moe_cache_size              =*/ 0,
@@ -129,7 +240,7 @@ index 7e6974431..37de24c87 100644
          /*.abort_callback              =*/ nullptr,
          /*.abort_callback_data         =*/ nullptr,
          /*.embeddings                  =*/ false,
-@@ -3893,13 +3963,65 @@ llama_context_params llama_context_default_params() {
+@@ -3893,7 +4054,7 @@ llama_context_params llama_context_default_params() {
  }
  
  llama_context * llama_init_from_model(
@@ -138,61 +249,3 @@ index 7e6974431..37de24c87 100644
          llama_context_params   params) {
      if (!model) {
          LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
-         return nullptr;
-     }
- 
-+#ifdef GUANACO_ENABLED
-+    // Router Prefetch: every time the MoE gating node (ffn_moe_topk-<il>)
-+    // is computed, read the selected expert ids and pread only those
-+    // expert slices from the GGUF into their slabs before mul_mat_id runs.
-+    static auto guanaco_eval_callback = [](
-+            struct ggml_tensor * t, bool ask, void * user_data) -> bool {
-+        (void)ask;
-+        if (ask) {
-+            return true; // called before compute; nothing to do
-+        }
-+        auto * hook = static_cast<guanaco::GuanacoModelHook *>(user_data);
-+        if (hook == nullptr || t == nullptr) {
-+            return true;
-+        }
-+        const char * name = ggml_get_name(t);
-+        if (name == nullptr) {
-+            return true;
-+        }
-+        // Dense layer-window streaming: "l_out-<il>" is emitted once per
-+        // transformer layer, so it marks the layer boundary for the pager.
-+        if (strncmp(name, "l_out-", 6) == 0) {
-+            hook->on_layer_boundary(atoi(name + 6));
-+            return true;
-+        }
-+        if (strncmp(name, "ffn_moe_topk", 12) != 0) {
-+            return true;
-+        }
-+        // runtime name is "ffn_moe_topk-<il>" (layer suffix)
-+        int layer = -1;
-+        const char * dash = strrchr(name, '-');
-+        if (dash != nullptr) {
-+            layer = atoi(dash + 1);
-+        }
-+        const int n = (int)(t->ne[0] * t->ne[1]); // n_expert_used * n_tokens
-+        if (n <= 0 || t->buffer == nullptr) {
-+            return true;
-+        }
-+        // the router node can run on a device backend (op_offload), where
-+        // t->data is not host-readable, so read the ids through the backend
-+        std::vector<int> router_ids(n);
-+        ggml_backend_tensor_get(t, router_ids.data(), 0, n * sizeof(int));
-+        hook->on_router_computed(layer, router_ids.data(), n);
-+        return true;
-+    };
-+
-+    if (static_cast<llama_model_base *>(model)->guanaco_hook != nullptr) {
-+        params.cb_eval           = guanaco_eval_callback;
-+        params.cb_eval_user_data = static_cast<llama_model_base *>(model)->guanaco_hook;
-+    }
-+#endif
-+
-+
-     if (params.n_batch == 0 && params.n_ubatch == 0) {
-         LLAMA_LOG_ERROR("%s: n_batch and n_ubatch cannot both be zero\n", __func__);
-         return nullptr;

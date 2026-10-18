@@ -322,13 +322,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // Streaming replaces params.cb_eval with Guanaco's own router hook, so the
-    // probe would see no nodes and silently report nothing.
-    if (params.load_mode == LLAMA_LOAD_MODE_STREAMING) {
-        fprintf(stderr, "[tomoe_probe] streaming replaces cb_eval and hides every\n"
-                        "  node. Re-run with --load-mode mmap.\n");
-        return 2;
-    }
+    // Under streaming Guanaco chains its router hook with this callback instead
+    // of replacing it, so the probe sees the same nodes either way.
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
     const bool add_bos = llama_vocab_get_add_bos(vocab);

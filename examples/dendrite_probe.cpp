@@ -323,14 +323,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // NOTE: --load-mode streaming replaces params.cb_eval with Guanaco's own
-    // router hook, so this probe sees no nodes. Load without streaming.
-    if (params.load_mode == LLAMA_LOAD_MODE_STREAMING) {
-        fprintf(stderr, "[dendrite_probe] streaming would replace cb_eval and hide all\n"
-                        "  nodes. Re-run with --load-mode mmap.\n");
-        return 2;
-    }
-
+    // Under streaming Guanaco chains its router hook with this callback instead
+    // of replacing it, so the probe sees the same nodes either way.
     load_rownorms_from_gguf(params.model.path.c_str(), &st);
     g_unit_rownorms.assign(st.rownorms_shared.empty() ? 1 : st.rownorms_shared[0].size(), 1.0f);
 
