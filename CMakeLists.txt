@@ -305,6 +305,12 @@ if(GUANACO_BUILD_PROBES)
     target_compile_features(dendrite_probe PRIVATE cxx_std_17)
     target_include_directories(dendrite_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+    # Memory pressure harness for the big/small cascade. Occupies a known amount
+    # of RAM, optionally streaming it at a target rate, so contention can be
+    # attributed to capacity, bandwidth or CPU without a second model.
+    add_executable(memhog examples/memhog.cpp)
+    target_link_libraries(memhog PRIVATE Threads::Threads)
+
     # Decisive test: does retained contribution mass predict retained quality?
     # Masks the pathways the map drops and measures held-out NLL. Zeroes tensor
     # data in place, so it requires -ngl 0.
