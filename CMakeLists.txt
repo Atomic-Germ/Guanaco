@@ -303,6 +303,24 @@ if(GUANACO_BUILD_PROBES)
     add_executable(dendrite_probe examples/dendrite_probe.cpp)
     target_link_libraries(dendrite_probe PRIVATE llama-common llama Threads::Threads)
     target_compile_features(dendrite_probe PRIVATE cxx_std_17)
+    target_include_directories(dendrite_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # Decisive test: does retained contribution mass predict retained quality?
+    # Masks the pathways the map drops and measures held-out NLL. Zeroes tensor
+    # data in place, so it requires -ngl 0.
+    add_executable(dendrite_ablate examples/dendrite_ablate.cpp)
+    target_link_libraries(dendrite_ablate PRIVATE llama-common llama Threads::Threads)
+    target_compile_features(dendrite_ablate PRIVATE cxx_std_17)
+    target_include_directories(dendrite_ablate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # Is the sparsity still there at quantisation-block granularity? Routing
+    # against a quantised weight has to select whole blocks, and a block is
+    # worth the sum of its 256 pathways. If that collapses the curve, the design
+    # is dead before any operator is written.
+    add_executable(block_probe examples/block_probe.cpp)
+    target_link_libraries(block_probe PRIVATE llama-common llama Threads::Threads)
+    target_compile_features(block_probe PRIVATE cxx_std_17)
+    target_include_directories(block_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 
 if(GUANACO_BUILD_TESTS)

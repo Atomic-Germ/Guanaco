@@ -334,9 +334,9 @@ int main(int argc, char ** argv) {
     load_rownorms_from_gguf(params.model.path.c_str(), &st);
     g_unit_rownorms.assign(st.rownorms_shared.empty() ? 1 : st.rownorms_shared[0].size(), 1.0f);
 
-    // Domains: blank-line-separated blocks in a file, so a prompt can span lines.
-    // Scoring several disparate domains on the same loaded model is what
-    // distinguishes a general map from a per-focus one.
+    // Domains: "# name" header lines in a file. Delimiting on the header, not on
+    // blank lines, matters - generated prose has paragraph breaks, and splitting
+    // on those silently shatters one domain into many short fragments.
     std::vector<std::pair<std::string, std::string>> domains;  // name, prompt
     if (const char * df = getenv("PROBE_DOMAINS")) {
         FILE * f = fopen(df, "r");
@@ -349,16 +349,22 @@ int main(int argc, char ** argv) {
             if (cur_txt.find_first_not_of(" \t\n\r") == std::string::npos) return;
             if (cur_name.empty()) cur_name = "domain" + std::to_string(domains.size() + 1);
             domains.emplace_back(cur_name, cur_txt);
-            cur_name.clear(); cur_txt.clear();
+            cur_txt.clear();
         };
-        char line[4096];
+        char line[8192];
         while (fgets(line, sizeof(line), f)) {
-            if (line[0] == '#' && cur_txt.empty()) continue;
-            if (line[0] == '\n' || line[0] == '\r') { flush(); continue; }
+            if (line[0] == '#') {
+                flush();
+                std::string h(line + 1);
+                while (!h.empty() && (h.back() == '\n' || h.back() == '\r')) h.pop_back();
+                cur_name = h;
+                continue;
+            }
             cur_txt += line;
         }
         flush();
         fclose(f);
+        fprintf(stderr, "[dendrite_probe] %zu domain(s) from %s\n", domains.size(), df);
     }
     if (domains.empty()) {
         domains.emplace_back("prompt", params.prompt);
@@ -387,6 +393,13 @@ int main(int argc, char ** argv) {
         if (n_cap > 0 && n_cap < n_max) n_max = n_cap;
         fprintf(stderr, "[dendrite_probe] domain %zu '%s': %d tokens\n",
                 di, domains[di].first.c_str(), n_max);
+        if (n_max < 64) {
+            // A short domain still yields numbers, but its map is noise and it
+            // quietly drags down every column it appears in.
+            fprintf(stderr, "[dendrite_probe] WARNING: domain '%s' has only %d tokens; "
+                            "its map is not meaningful and will bias the transfer matrix.\n",
+                    domains[di].first.c_str(), n_max);
+        }
 
         llama_memory_clear(llama_get_memory(ctx), true);
         int n_past = 0;
