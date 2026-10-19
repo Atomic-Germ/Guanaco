@@ -1,0 +1,7 @@
+# one GGUF path per line, machine-specific
+model_8b.txt
+model_path.txt
+model_moe.txt
+model_125.txt
+prompt.txt
+run/
