@@ -15,7 +15,7 @@
 set -u
 B=$(dirname "$(readlink -f "$0")")
 BIN=/home/atomic-germ/Projects/Guanaco-Test/build/bin
-SMALL=$(cat "$B/model_8b.txt")
+SMALL=$(cat "$B/model_9b.txt")
 
 pkill -x llama-server 2>/dev/null
 sleep 3

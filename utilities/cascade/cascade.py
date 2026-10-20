@@ -63,14 +63,14 @@ CONSIDERED_PORT = 8082
 # role -> (model file, port, extra env, extra args)
 MODELS = {
     "quick": {
-        "file": f"{HOME}/model_8b.txt",
+        "file": f"{HOME}/model_9b.txt",
         "port": QUICK_PORT,
         "env": {},
         "args": ["-c", "4096", "-t", "6"],
     },
     # dense 27B: the measured "considered" pairing
     "considered_dense": {
-        "file": f"{HOME}/model_path.txt",
+        "file": f"{HOME}/model_27b.txt",
         "port": CONSIDERED_PORT,
         "env": {
             "LLAMA_ARG_LOAD_MODE": "streaming",

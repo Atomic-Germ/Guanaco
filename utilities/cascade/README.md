@@ -79,8 +79,11 @@ something this tool decides, which is why it is a switch rather than a policy.
 
 ## CPU-bound, deliberately
 
-Both roles run with `-ngl 0`. llama-server with any Vulkan-backed KV cache
-segfaults on the second request:
+Both roles run with `-ngl 0` today, but that is a choice rather than a
+workaround - see below.
+
+**The crash.** With a GPU-resident KV cache, llama-server segfaulted on the
+second request:
 
     server_slot::prompt_save
     llama_context::state_seq_get_data
@@ -88,10 +91,31 @@ segfaults on the second request:
     ggml_backend_vk_buffer_get_tensor
     ggml_vk_buffer_read_2d              <- SIGSEGV
 
-Reproduced 4/4 with identical stacks, with gpu-pill **on and off**, so it is not
-Guanaco's UMA allocation - upstream `read_2d` faults whenever the KV cache is in
-a Vulkan buffer. `attrib.sh` reproduces the attribution. Costs about 6% on the
-quick model versus gpu-pill's 7.6 tok/s.
+Reproduced 4/4 with identical stacks, on both a dense and a MoE model. It was
+**ours**, not upstream: an unpatched llama.cpp at `aa94f2086` survives the
+identical scenario, and so does this build with `--no-kv-offload`.
+
+**The fix.** gpu-pill now keeps the KV cache in host memory. Under gpu-pill the
+GPU reads weights directly out of system RAM over UMA, so a separate
+GPU-resident KV buffer cannot be faster than the host memory the weights are
+already streaming from - it only introduces a second allocation discipline for
+a path that llama-server's slot handling then has to move around.
+
+**The fix is free.** 9B dense, five requests each:
+
+| configuration | tok/s |
+|---|---|
+| `-ngl 0` (CPU compute) | 3.52-3.60 |
+| `-ngl 99` + gpu-pill (GPU compute, KV in host) | 3.35-3.42 |
+| `-ngl 99` + gpu-pill + streaming | 3.53-3.54 |
+| `-ngl 99` + streaming, 2 GB budget (forced paging) | 2.57-2.94 |
+
+Note the GPU is **not** faster than six CPU threads for this model - CPU is
+marginally ahead. An earlier "gpu-pill is worth 6%" note was measured on a
+different model and does not generalise.
+
+`attrib_final.sh` reproduces the attribution against a vanilla upstream build.
+`verify_after_vulkan.sh` drives the exact path that used to die.
 
 ## Usage
 
